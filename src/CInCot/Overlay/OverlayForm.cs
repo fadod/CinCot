@@ -20,7 +20,8 @@ internal sealed record OverlayResult(OverlayOutcome Outcome, Size Size, string? 
 internal sealed class OverlayForm : Form
 {
     private enum Phase { Idle, Selecting, Editing }
-    private enum DragKind { None, Select, Draw, Resize }
+    private enum DragKind { None, Select, Draw, Resize, TextRange, TextBox }
+    private enum OcrState { Off, Running, Ready }
 
     internal static readonly Color Accent = Color.FromArgb(0, 120, 212);
     internal static readonly Color[] Palette =
@@ -55,6 +56,18 @@ internal sealed class OverlayForm : Form
     private float _scale = 1f;
     private Font _labelFont = new("Segoe UI", 12f, FontStyle.Regular, GraphicsUnit.Pixel);
 
+    // Text recognition and text selection.
+    private int _session;
+    private OcrPage? _ocr;
+    private OcrState _ocrState;
+    private readonly SortedSet<int> _textSelection = new();
+    private int _anchorWord = -1;
+    private readonly ContextMenuStrip _menu = new() { ShowImageMargin = false };
+    private readonly ToolStripMenuItem _menuCopyText, _menuSelectAll, _menuRedact, _menuBlur, _menuPixelate;
+    private readonly System.Windows.Forms.Timer _toastTimer = new() { Interval = 1800 };
+    private string? _toast;
+    private Rectangle _toastRect;
+
     public OverlayForm(AppSettings settings)
     {
         _settings = settings;
@@ -67,6 +80,20 @@ internal sealed class OverlayForm : Form
         KeyPreview = true;
         Cursor = Cursors.Cross;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque, true);
+
+        _menuCopyText = new ToolStripMenuItem("Copy text", null, (_, _) => CopyText()) { ShortcutKeyDisplayString = "Ctrl+C" };
+        _menuSelectAll = new ToolStripMenuItem("Select all text", null, (_, _) => SelectAllText()) { ShortcutKeyDisplayString = "Ctrl+A" };
+        _menuRedact = new ToolStripMenuItem("Redact selected text", null, (_, _) => RedactSelectedText(RedactionKind.Box)) { ShortcutKeyDisplayString = "Del" };
+        _menuBlur = new ToolStripMenuItem("Blur selected text", null, (_, _) => RedactSelectedText(RedactionKind.Blur));
+        _menuPixelate = new ToolStripMenuItem("Pixelate selected text", null, (_, _) => RedactSelectedText(RedactionKind.Pixelate));
+        _menu.Items.AddRange(new ToolStripItem[]
+        {
+            _menuCopyText, _menuSelectAll, new ToolStripSeparator(), _menuRedact, _menuBlur, _menuPixelate, new ToolStripSeparator(),
+            new ToolStripMenuItem("Copy image and close", null, (_, _) => Export(save: false)) { ShortcutKeyDisplayString = "Enter" },
+            new ToolStripMenuItem("Save image and close", null, (_, _) => Export(save: true)) { ShortcutKeyDisplayString = "Ctrl+S" },
+        });
+        _menu.Opening += (_, _) => UpdateMenu();
+        _toastTimer.Tick += (_, _) => HideToast();
     }
 
     public event EventHandler<OverlayResult>? Completed;
@@ -102,6 +129,11 @@ internal sealed class OverlayForm : Form
     public void Begin(CaptureFrame frame, CaptureMode mode)
     {
         var watch = System.Diagnostics.Stopwatch.StartNew();
+        int session = ++_session;
+        _ocr = null;
+        _ocrState = OcrState.Off;
+        _textSelection.Clear();
+        _anchorWord = -1;
         _frame = frame;
         _dimmed = new DibBitmap(frame.Image.Width, frame.Image.Height);
         Effects.Dim(frame.Image, _dimmed.Bitmap, 1f - _settings.DimPercent / 100f);
@@ -147,6 +179,13 @@ internal sealed class OverlayForm : Form
         Log.Trace($"shown {watch.ElapsedMilliseconds} ms");
         Invalidate();
         _lastDynamic = DynamicBounds();
+
+        // Posted, so it runs after the first frame is on screen and never delays the freeze.
+        if (_settings.TextRecognition && OcrService.IsAvailable)
+        {
+            _ocrState = OcrState.Running;
+            BeginInvoke(() => StartTextRecognition(session, frame));
+        }
     }
 
     private void Finish(OverlayOutcome outcome, string? path = null, string? error = null)
@@ -154,6 +193,12 @@ internal sealed class OverlayForm : Form
         if (_phase == Phase.Idle) return;
         var size = _doc?.Selection.Size ?? Size.Empty;
         _phase = Phase.Idle;
+        _session++;
+        _menu.Close();
+        _toastTimer.Stop();
+        _toast = null;
+        _ocr = null;
+        _textSelection.Clear();
         Hide();
         _preview?.Dispose();
         _preview = null;
@@ -181,7 +226,8 @@ internal sealed class OverlayForm : Form
     {
         base.OnDeactivate(e);
         // Keep the overlay on top if something else grabs focus mid-capture.
-        if (_phase != Phase.Idle) BeginInvoke(() => { if (_phase != Phase.Idle) Win32.ForceForeground(Handle); });
+        if (_phase != Phase.Idle && !_menu.Visible)
+            BeginInvoke(() => { if (_phase != Phase.Idle && !_menu.Visible) Win32.ForceForeground(Handle); });
     }
 
     // ---------------------------------------------------------------- state helpers
@@ -234,6 +280,9 @@ internal sealed class OverlayForm : Form
     private void SetTool(ToolKind tool)
     {
         CommitText();
+        // The Select tool outlines every recognised word, so switching to or from it repaints the selection.
+        if ((tool == ToolKind.SelectText) != (_tool == ToolKind.SelectText) && _doc is not null)
+            Invalidate(Rectangle.Inflate(_doc.Selection, Px(4), Px(4)));
         _tool = tool;
         RefreshDynamic();
     }
@@ -265,6 +314,8 @@ internal sealed class OverlayForm : Form
             if (_drag == DragKind.Resize) r = Drawing.Union(r, Rectangle.Inflate(sel, Px(8), Px(8)));
             if (_drag == DragKind.Draw && _tool == ToolKind.Crop) r = Drawing.Union(r, Rectangle.Inflate(_dragRect, Px(4), Px(4)));
             if (_preview is not null) r = Drawing.Union(r, Rectangle.Inflate(_preview.Bounds, Px(4), Px(4)));
+            if (_drag == DragKind.TextBox) r = Drawing.Union(r, Rectangle.Inflate(_dragRect, Px(4), Px(4)));
+            if (_toast is not null) r = Drawing.Union(r, _toastRect);
         }
         return r;
     }
@@ -325,7 +376,13 @@ internal sealed class OverlayForm : Form
             _doc.Render(g);
             _preview?.Render(g);
             if (_textAt is not null && _preview is not null) DrawCaret(g, _preview.Bounds);
+            DrawTextLayer(g);
             g.Restore(state);
+            if (_drag == DragKind.TextBox && !_dragRect.IsEmpty)
+            {
+                using var box = new Pen(Accent, Math.Max(1f, _scale)) { DashStyle = DashStyle.Dash };
+                g.DrawRectangle(box, _dragRect);
+            }
             if (_drag == DragKind.Draw && _tool == ToolKind.Crop && !_dragRect.IsEmpty)
             {
                 using var crop = new Pen(Color.White, Math.Max(1f, _scale)) { DashStyle = DashStyle.Dash };
@@ -336,7 +393,16 @@ internal sealed class OverlayForm : Form
         if (!sel.IsEmpty) DrawSelectionChrome(g, sel);
 
         if (_phase == Phase.Editing && _doc is not null)
-            _toolbar.Paint(g, _tool, _colorIndex, _widthIndex, Palette, _hoverButton, _doc.CanUndo, _doc.CanRedo);
+        {
+            _toolbar.Paint(g, _tool, _colorIndex, _widthIndex, Palette, _hoverButton, _doc.CanUndo, _doc.CanRedo, OcrStatusText(), HasText);
+            if (_toast is not null)
+            {
+                using var bg = new SolidBrush(Color.FromArgb(235, 20, 20, 22));
+                Drawing.FillRoundRect(g, bg, _toastRect, _toastRect.Height / 2f);
+                TextRenderer.DrawText(g, _toast, _labelFont, _toastRect, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
+            }
+        }
 
         if (_phase == Phase.Selecting)
         {
@@ -524,6 +590,7 @@ internal sealed class OverlayForm : Form
         if (e.Button == MouseButtons.Right)
         {
             if (_phase == Phase.Selecting) Finish(OverlayOutcome.Cancelled);
+            else if (_drag == DragKind.None && !_toolbar.Bounds.Contains(e.Location)) ShowContextMenu(e.Location);
             return;
         }
         if (e.Button != MouseButtons.Left) return;
@@ -575,6 +642,26 @@ internal sealed class OverlayForm : Form
             return;
         }
 
+        if (_tool == ToolKind.SelectText)
+        {
+            _dragStart = e.Location;
+            if (WordAt(e.Location) is { } word)
+            {
+                // Shift+click extends from the previous anchor, like a text editor.
+                if (!ModifierKeys.HasFlag(Keys.Shift) || _anchorWord < 0) _anchorWord = word;
+                _drag = DragKind.TextRange;
+                SetTextSelection(WordRange(_anchorWord, word));
+            }
+            else
+            {
+                _drag = DragKind.TextBox;
+                _dragRect = new Rectangle(e.Location, Size.Empty);
+                SetTextSelection(Array.Empty<int>());
+            }
+            RefreshDynamic();
+            return;
+        }
+
         if (_tool == ToolKind.Text)
         {
             _textAt = e.Location;
@@ -611,11 +698,31 @@ internal sealed class OverlayForm : Form
         {
             UpdatePreview(e.Location, ModifierKeys.HasFlag(Keys.Shift));
         }
+        else if (_drag == DragKind.TextRange)
+        {
+            if (NearestWord(e.Location) is { } word) SetTextSelection(WordRange(_anchorWord, word));
+        }
+        else if (_drag == DragKind.TextBox)
+        {
+            _dragRect = Drawing.Normalize(_dragStart, Drawing.Clamp(e.Location, _doc!.Selection));
+            SetTextSelection(VisibleWords().Where(i => _ocr!.Words[i].Bounds.IntersectsWith(_dragRect)));
+        }
         else
         {
             UpdateEditingHover(e.Location);
         }
         RefreshDynamic();
+    }
+
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        // Double-click a word with the Select tool to select its whole line.
+        if (_phase != Phase.Editing || _tool != ToolKind.SelectText || e.Button != MouseButtons.Left) return;
+        if (WordAt(e.Location) is not { } word) return;
+        int line = _ocr!.Words[word].Line;
+        _drag = DragKind.None;
+        SetTextSelection(VisibleWords().Where(i => _ocr.Words[i].Line == line));
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -658,6 +765,10 @@ internal sealed class OverlayForm : Form
             _drag = DragKind.None;
             CommitPreview();
         }
+        else if (_drag is DragKind.TextRange or DragKind.TextBox)
+        {
+            _drag = DragKind.None;
+        }
         RefreshDynamic();
     }
 
@@ -673,7 +784,8 @@ internal sealed class OverlayForm : Form
         int handle = HandleAt(sel, p);
         if (handle >= 0) SetCursor(HandleCursor(handle));
         else if (!sel.Contains(p)) SetCursor(_doc.IsEmpty ? Cursors.Cross : Cursors.Default);
-        else SetCursor(_tool == ToolKind.Text ? Cursors.IBeam : Cursors.Cross);
+        else if (_tool == ToolKind.Text || (_tool == ToolKind.SelectText && WordAt(p) is not null)) SetCursor(Cursors.IBeam);
+        else SetCursor(Cursors.Cross);
     }
 
     private static ToolKind? HeldRedactionKey()
@@ -829,6 +941,7 @@ internal sealed class OverlayForm : Form
             case Toolbar.Kind.Undo: Undo(); break;
             case Toolbar.Kind.Redo: Redo(); break;
             case Toolbar.Kind.Copy: Export(save: false); break;
+            case Toolbar.Kind.CopyText: CopyText(); break;
             case Toolbar.Kind.Save: Export(save: true); break;
             case Toolbar.Kind.Color: _colorIndex = button.Index; UpdateTextPreview(); RefreshDynamic(); break;
             case Toolbar.Kind.Width: _widthIndex = button.Index; UpdateTextPreview(); RefreshDynamic(); break;
@@ -872,14 +985,23 @@ internal sealed class OverlayForm : Form
         switch (e.KeyCode)
         {
             case Keys.Escape:
-                Finish(OverlayOutcome.Cancelled);
+                if (editing && _textSelection.Count > 0) SetTextSelection(Array.Empty<int>());
+                else Finish(OverlayOutcome.Cancelled);
+                break;
+            case Keys.A when e.Control && editing:
+                SelectAllText();
+                break;
+            case Keys.Delete or Keys.Back when editing && SelectedWords().Any():
+                RedactSelectedText(RedactionKind.Box);
                 break;
             case Keys.Enter:
                 if (editing) Export(save: false);
                 else if (_hoverWindow is { } window) { EnterEditing(window); Invalidate(); }
                 break;
             case Keys.C when e.Control && editing:
-                Export(save: false);
+                // With text selected, Ctrl+C copies the text and keeps the capture open.
+                if (SelectedWords().Any()) CopyText();
+                else Export(save: false);
                 break;
             case Keys.S when e.Control && editing:
                 Export(save: true);
@@ -934,8 +1056,254 @@ internal sealed class OverlayForm : Form
         Keys.P => ToolKind.Pen,
         Keys.H => ToolKind.Highlight,
         Keys.C => ToolKind.Crop,
+        Keys.S => ToolKind.SelectText,
         _ => null,
     };
+
+    // ---------------------------------------------------------------- text recognition & selection
+
+    private async void StartTextRecognition(int session, CaptureFrame frame)
+    {
+        if (session != _session) return;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        float upscale = _settings.OcrUpscale;
+        OcrPage page;
+        try
+        {
+            var snapshots = OcrService.Snapshot(frame.Image, frame.Monitors.Select(m => m.Bounds));
+            page = await Task.Run(() => OcrService.RecognizeAsync(snapshots, upscale));
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex);
+            page = OcrPage.Empty;
+        }
+        if (session != _session || _phase == Phase.Idle) return;
+        _ocr = page;
+        _ocrState = OcrState.Ready;
+        Log.Trace($"ocr {page.Words.Count} words in {watch.ElapsedMilliseconds} ms (upscale {upscale})");
+        if (_tool == ToolKind.SelectText && _doc is not null) Invalidate(Rectangle.Inflate(_doc.Selection, Px(4), Px(4)));
+        RefreshDynamic();
+    }
+
+    private bool HasText => VisibleWords().Any();
+
+    private string OcrStatusText() => _ocrState switch
+    {
+        OcrState.Running => "Reading text…",
+        OcrState.Ready => VisibleWords().Count() is var n and > 0 ? $"{n} words" : "No text",
+        _ => "OCR off",
+    };
+
+    /// <summary>Words inside the selection that are not already under a redaction, in reading order.</summary>
+    private IEnumerable<int> VisibleWords()
+    {
+        if (_ocr is null || _doc is null) yield break;
+        var selection = _drag == DragKind.Resize ? _dragRect : _doc.Selection;
+        var redacted = _doc.Items.OfType<RedactionAnnotation>().Select(r => r.Rect).ToList();
+        for (int i = 0; i < _ocr.Words.Count; i++)
+        {
+            var b = _ocr.Words[i].Bounds;
+            var center = new Point(b.X + b.Width / 2, b.Y + b.Height / 2);
+            if (!selection.Contains(center) || redacted.Any(r => r.Contains(center))) continue;
+            yield return i;
+        }
+    }
+
+    private IEnumerable<int> SelectedWords()
+    {
+        if (_textSelection.Count == 0) return Array.Empty<int>();
+        return VisibleWords().Where(_textSelection.Contains);
+    }
+
+    private int? WordAt(Point p)
+    {
+        if (_ocr is null) return null;
+        foreach (int i in VisibleWords())
+            if (Rectangle.Inflate(_ocr.Words[i].Bounds, Px(3), Px(2)).Contains(p)) return i;
+        return null;
+    }
+
+    /// <summary>The closest word, favouring the same line, so a drag past the end of a line still selects to it.</summary>
+    private int? NearestWord(Point p)
+    {
+        if (_ocr is null) return null;
+        int? best = null;
+        long bestScore = long.MaxValue;
+        foreach (int i in VisibleWords())
+        {
+            var b = _ocr.Words[i].Bounds;
+            long dx = Math.Max(0, Math.Max(b.Left - p.X, p.X - b.Right));
+            long dy = Math.Max(0, Math.Max(b.Top - p.Y, p.Y - b.Bottom));
+            long score = dx + dy * 4;
+            if (score < bestScore) { bestScore = score; best = i; }
+        }
+        return best;
+    }
+
+    private IEnumerable<int> WordRange(int a, int b)
+    {
+        int lo = Math.Min(a, b), hi = Math.Max(a, b);
+        return VisibleWords().Where(i => i >= lo && i <= hi);
+    }
+
+    /// <summary>Selected words merged into one rectangle per run on a line, for highlighting and redaction.</summary>
+    private List<Rectangle> Segments(IEnumerable<int> words)
+    {
+        var result = new List<Rectangle>();
+        int previous = -2, line = -1;
+        foreach (int i in words.Order())
+        {
+            var word = _ocr!.Words[i];
+            if (i == previous + 1 && word.Line == line && result.Count > 0) result[^1] = Rectangle.Union(result[^1], word.Bounds);
+            else result.Add(word.Bounds);
+            previous = i;
+            line = word.Line;
+        }
+        return result;
+    }
+
+    private void SetTextSelection(IEnumerable<int> words)
+    {
+        var before = _textSelection.Count > 0 && _ocr is not null ? Segments(_textSelection) : new List<Rectangle>();
+        _textSelection.Clear();
+        _textSelection.UnionWith(words);
+        var after = _textSelection.Count > 0 ? Segments(_textSelection) : new List<Rectangle>();
+        foreach (var r in before.Concat(after)) Invalidate(Rectangle.Inflate(r, Px(4), Px(4)));
+        RefreshDynamic();
+    }
+
+    private void DrawTextLayer(Graphics g)
+    {
+        if (_ocr is null) return;
+        if (_tool == ToolKind.SelectText)
+        {
+            using var outline = new Pen(Color.FromArgb(120, Accent), 1f);
+            foreach (int i in VisibleWords())
+                if (!_textSelection.Contains(i)) g.DrawRectangle(outline, Rectangle.Inflate(_ocr.Words[i].Bounds, 1, 1));
+        }
+        var selected = SelectedWords().ToList();
+        if (selected.Count == 0) return;
+        using var fill = new SolidBrush(Color.FromArgb(95, Accent));
+        foreach (var r in Segments(selected)) g.FillRectangle(fill, Rectangle.Inflate(r, Px(2), Px(1)));
+    }
+
+    private bool TextNotReady()
+    {
+        if (_ocr is not null) return false;
+        ShowToast(_ocrState == OcrState.Running ? "Still reading text… try again in a moment" : "Text recognition is off or unavailable");
+        return true;
+    }
+
+    private void SelectAllText()
+    {
+        if (TextNotReady()) return;
+        CommitText();
+        if (_tool != ToolKind.SelectText) SetTool(ToolKind.SelectText);
+        var all = VisibleWords().ToList();
+        Log.Trace($"select all: {all.Count} words in {_doc?.Selection}");
+        SetTextSelection(all);
+        if (all.Count == 0) ShowToast("No text found in the selection");
+    }
+
+    /// <summary>Copies the selected text, or all text in the capture area if nothing is selected. The capture stays open.</summary>
+    private void CopyText()
+    {
+        if (TextNotReady()) return;
+        var words = SelectedWords().ToList();
+        bool all = words.Count == 0;
+        if (all) words = VisibleWords().ToList();
+        if (words.Count == 0)
+        {
+            ShowToast("No text found in the selection");
+            return;
+        }
+        try
+        {
+            Log.Trace($"copy text: {words.Count} words");
+            Clipboard.SetDataObject(_ocr!.TextOf(words), true, 10, 50);
+            ShowToast(all ? $"Copied all text ({words.Count} words)" : $"Copied {words.Count} word{(words.Count == 1 ? "" : "s")}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex);
+            ShowToast("The clipboard is busy; try again");
+        }
+    }
+
+    private void RedactSelectedText(RedactionKind kind)
+    {
+        if (TextNotReady() || _frame is null || _doc is null) return;
+        CommitText();
+        var words = SelectedWords().ToList();
+        if (words.Count == 0)
+        {
+            ShowToast("Select some text first (S, then drag over it)");
+            return;
+        }
+        int strength = kind switch
+        {
+            RedactionKind.Blur => _settings.BlurStrength,
+            RedactionKind.Pixelate => _settings.PixelateBlockSize,
+            _ => 0,
+        };
+        var annotations = Segments(words)
+            .Select(r => (Annotation)new RedactionAnnotation(kind, Rectangle.Inflate(r, Px(2), Px(2)), _frame.Image, (int)Math.Round(strength * _scale)))
+            .ToList();
+        _doc.AddRange(annotations);
+        SetTextSelection(Array.Empty<int>());
+        foreach (var a in annotations) Invalidate(Rectangle.Inflate(a.Bounds, Px(4), Px(4)));
+        ShowToast($"Redacted {words.Count} word{(words.Count == 1 ? "" : "s")} · Ctrl+Z to undo");
+    }
+
+    private void ShowContextMenu(Point p)
+    {
+        CommitText();
+        // Right-clicking a word that is not selected selects just that word, as in a text editor.
+        if (WordAt(p) is { } word && !_textSelection.Contains(word))
+        {
+            _anchorWord = word;
+            SetTextSelection(new[] { word });
+        }
+        _menu.Show(this, p);
+    }
+
+    private void UpdateMenu()
+    {
+        bool ready = _ocr is not null;
+        bool selected = ready && SelectedWords().Any();
+        bool any = ready && HasText;
+        _menuCopyText.Text = selected || !any ? "Copy text" : "Copy all text";
+        _menuCopyText.Enabled = any;
+        _menuSelectAll.Enabled = any;
+        _menuRedact.Enabled = _menuBlur.Enabled = _menuPixelate.Enabled = selected;
+        if (!ready) _menuCopyText.Text = _ocrState == OcrState.Running ? "Reading text…" : "Copy text (OCR off)";
+    }
+
+    private void ShowToast(string text)
+    {
+        if (_toast is not null) Invalidate(_toastRect);
+        _toast = text;
+        var size = TextRenderer.MeasureText(text, _labelFont);
+        int w = size.Width + Px(24), h = size.Height + Px(12);
+        var anchor = _toolbar.Bounds;
+        int y = anchor.Top - h - Px(6);
+        if (_frame is not null && y < _frame.MonitorAt(anchor.Location).Bounds.Top) y = anchor.Bottom + Px(6);
+        _toastRect = new Rectangle(anchor.X + (anchor.Width - w) / 2, y, w, h);
+        Invalidate(_toastRect);
+        _toastTimer.Stop();
+        _toastTimer.Start();
+        RefreshDynamic();
+    }
+
+    private void HideToast()
+    {
+        _toastTimer.Stop();
+        if (_toast is null) return;
+        _toast = null;
+        Invalidate(_toastRect);
+        RefreshDynamic();
+    }
 
     private void Nudge(Keys key, int step)
     {
@@ -998,6 +1366,8 @@ internal sealed class OverlayForm : Form
         {
             _toolbar.Dispose();
             _labelFont.Dispose();
+            _menu.Dispose();
+            _toastTimer.Dispose();
             _doc?.Dispose();
             _dimmed?.Dispose();
             _frame?.Dispose();

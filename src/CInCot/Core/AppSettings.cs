@@ -51,6 +51,12 @@ public sealed class AppSettings
     [Category("Editing"), DisplayName("Blur strength"), Description("4-40. Larger is safer.")]
     public int BlurStrength { get; set; } = 14;
 
+    [Category("Text recognition"), DisplayName("Recognise text"), Description("Run on-device OCR on every capture so text can be selected, copied and redacted.")]
+    public bool TextRecognition { get; set; } = true;
+
+    [Category("Text recognition"), DisplayName("Upscale for small text"), Description("1-3. Enlarging the image before OCR finds small screen text more reliably but takes longer.")]
+    public float OcrUpscale { get; set; } = 2f;
+
     [Category("General"), DisplayName("Show notifications")]
     public bool ShowNotifications { get; set; } = true;
 
@@ -92,6 +98,7 @@ public sealed class AppSettings
         DimPercent = Math.Clamp(DimPercent, 0, 90);
         PixelateBlockSize = Math.Clamp(PixelateBlockSize, 4, 64);
         BlurStrength = Math.Clamp(BlurStrength, 4, 40);
+        OcrUpscale = Math.Clamp(OcrUpscale, 1f, 3f);
         if (string.IsNullOrWhiteSpace(FileNamePattern)) FileNamePattern = "CInCot_{0:yyyy-MM-dd_HH-mm-ss}";
         return this;
     }

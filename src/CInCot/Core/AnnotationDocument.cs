@@ -22,6 +22,13 @@ internal sealed class AnnotationDocument : IDisposable
 
     public void Add(Annotation annotation) => Execute(new AddEdit(annotation));
 
+    /// <summary>Adds several annotations as one undo step.</summary>
+    public void AddRange(IEnumerable<Annotation> annotations)
+    {
+        var edits = annotations.Select(a => new AddEdit(a)).ToList();
+        if (edits.Count > 0) Execute(new GroupEdit(edits));
+    }
+
     public void SetSelection(Rectangle selection)
     {
         if (selection != Selection) Execute(new SelectionEdit(Selection, selection));
@@ -81,6 +88,24 @@ internal sealed class AnnotationDocument : IDisposable
         public void Apply(AnnotationDocument doc) => doc._items.Add(annotation);
         public void Revert(AnnotationDocument doc) => doc._items.Remove(annotation);
         public void Discard() => annotation.Dispose();
+    }
+
+    private sealed class GroupEdit(IReadOnlyList<IEdit> edits) : IEdit
+    {
+        public void Apply(AnnotationDocument doc)
+        {
+            foreach (var e in edits) e.Apply(doc);
+        }
+
+        public void Revert(AnnotationDocument doc)
+        {
+            for (int i = edits.Count - 1; i >= 0; i--) edits[i].Revert(doc);
+        }
+
+        public void Discard()
+        {
+            foreach (var e in edits) e.Discard();
+        }
     }
 
     private sealed class SelectionEdit(Rectangle from, Rectangle to) : IEdit

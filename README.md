@@ -19,13 +19,27 @@ This is the Phase 1 MVP of the SwiftShot/CInCot design spec.
 | Ctrl + S | Save to folder (and copy) and close |
 | Ctrl + Z / Ctrl + Y | Undo / redo |
 | Esc / right-click while selecting | Cancel |
-| B X R U A T P H C | Blur, Pixelate, Redact, Rect, Arrow, Text, Pen, Highlighter, Crop |
+| S B X R U A T P H C | Select text, Blur, Pixelate, Redact, Rect, Arrow, Text, Pen, Highlighter, Crop |
+| Ctrl + A | Select all recognised text in the capture |
+| Ctrl + C (with text selected) | Copy the text; the capture stays open |
+| Delete (with text selected) | Black-box redact the selected text |
+| Right-click | Copy text, Select all, Redact / Blur / Pixelate selected text, Copy or Save image |
+| Double-click a word (Select tool) | Select the whole line |
 | 1-6, [ ] | Colour, stroke width |
 | Arrow keys (Shift = 10 px) | Nudge the selection |
 | Shift while drawing | Square shapes, 45° arrows, straight strokes |
 
 Running `CInCot.exe` a second time while it is in the tray starts a region capture, so you can
 bind it to any launcher or mouse button too.
+
+## Text recognition
+
+Each capture is read with Windows' built-in, on-device OCR (`Windows.Media.Ocr`, in your Windows
+display languages). Nothing is uploaded. Recognition starts in the background as soon as the screen
+freezes; the toolbar shows "Reading text…" and then the word count. On a 2-monitor desktop it takes
+~0.9–1.3 s at the default 2× upscale. Words under an existing redaction can't be selected or copied.
+OCR can miss small or low-contrast text, so check a redacted capture before sharing it. Turn it off
+or change the upscale under Settings → Text recognition.
 
 ## Build
 
@@ -72,5 +86,5 @@ tests/CInCot.Tests/
   fully painted 61–72 ms after PrtSc. The first capture after launch takes ~106 ms. Set
   `CINCOT_TRACE=1` to log these timings to `%LOCALAPPDATA%\CInCot\logs`.
 - Idle memory is ~75 MB private, mostly the Direct3D runtime that keeps capture fast.
-- Not built yet (later phases of the spec): the Direct2D/DirectComposition renderer, OCR
-  auto-redaction, scroll capture, history and cloud sharing.
+- Not built yet (later phases of the spec): the Direct2D/DirectComposition renderer, automatic
+  detection of emails/phones/cards for one-key redaction, scroll capture, history and cloud sharing.

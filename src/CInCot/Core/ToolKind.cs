@@ -11,4 +11,5 @@ public enum ToolKind
     Pen,
     Highlight,
     Crop,
+    SelectText,
 }

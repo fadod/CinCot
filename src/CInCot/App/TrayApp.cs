@@ -38,6 +38,7 @@ internal sealed class TrayApp : ApplicationContext
 
         _dxgi = DxgiCapture.TryCreate();
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        _ = Task.Run(() => OcrService.IsAvailable); // load the OCR engine before the first capture
 
         _tray = new NotifyIcon
         {

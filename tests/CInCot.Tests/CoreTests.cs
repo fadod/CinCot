@@ -104,6 +104,61 @@ public class ToolbarTests
 
         toolbar.Layout(new Rectangle(0, 0, 1920, 1080), monitor, 1f);
         Assert.True(monitor.Contains(toolbar.Bounds));
-        Assert.Equal(12, toolbar.Buttons.Count(b => b.Kind is Toolbar.Kind.Tool or Toolbar.Kind.Undo or Toolbar.Kind.Copy or Toolbar.Kind.Save));
+        Assert.Equal(14, toolbar.Buttons.Count(b => b.Kind is Toolbar.Kind.Tool or Toolbar.Kind.Undo or Toolbar.Kind.Copy or Toolbar.Kind.Save or Toolbar.Kind.CopyText));
+        Assert.Null(toolbar.HitTest(toolbar.Buttons.Single(b => b.Kind == Toolbar.Kind.Status).Bounds.Location + new Size(2, 2)));
+    }
+}
+
+public class TextTests
+{
+    [Fact]
+    public void Text_joins_words_with_spaces_and_lines_with_breaks()
+    {
+        var page = new OcrPage(new[]
+        {
+            new OcrWord("Hello", new Rectangle(0, 0, 10, 10), 0),
+            new OcrWord("world", new Rectangle(12, 0, 10, 10), 0),
+            new OcrWord("again", new Rectangle(0, 20, 10, 10), 1),
+        }, useSpaces: true);
+        Assert.Equal("Hello world" + Environment.NewLine + "again", page.TextOf(new[] { 2, 0, 1 }));
+        Assert.Equal("world", page.TextOf(new[] { 1 }));
+    }
+
+    [Fact]
+    public void AddRange_is_one_undo_step()
+    {
+        using var source = new Bitmap(50, 50);
+        using var doc = new AnnotationDocument();
+        doc.Reset(new Rectangle(0, 0, 50, 50));
+        doc.AddRange(new Annotation[]
+        {
+            new RedactionAnnotation(RedactionKind.Box, new Rectangle(0, 0, 10, 5), source, 0),
+            new RedactionAnnotation(RedactionKind.Box, new Rectangle(0, 10, 10, 5), source, 0),
+        });
+        Assert.Equal(2, doc.Items.Count);
+        doc.Undo();
+        Assert.True(doc.IsEmpty);
+    }
+
+    [Fact]
+    public async Task Ocr_reads_rendered_text_and_maps_it_back_to_frame_coordinates()
+    {
+        if (!OcrService.IsAvailable) return; // no OCR language pack on this machine
+        using var image = new Bitmap(900, 300, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        using (var g = Graphics.FromImage(image))
+        {
+            g.Clear(Color.White);
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using var font = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
+            g.DrawString("Invoice sent to jane.doe@example.com", font, Brushes.Black, 420, 200);
+        }
+
+        var snapshots = OcrService.Snapshot(image, new[] { new Rectangle(400, 150, 500, 150) });
+        var page = await OcrService.RecognizeAsync(snapshots, 2f);
+
+        var invoice = Assert.Single(page.Words, w => w.Text == "Invoice");
+        Assert.InRange(invoice.Bounds.X, 415, 430);
+        Assert.InRange(invoice.Bounds.Y, 195, 215);
+        Assert.Contains(page.Words, w => w.Text.Contains("jane.doe@example.com"));
     }
 }

@@ -5,19 +5,22 @@ namespace CInCot.Overlay;
 
 /// <summary>
 /// The floating editing toolbar, painted directly on the overlay (no child windows), so showing it is
-/// just a layout pass. Rows: Blur Pixelate Redact Rect Arrow Text / Pen Highlight Crop Undo Copy Save /
-/// colours, stroke width, Redo, Close.
+/// just a layout pass. Rows: Select Blur Pixelate Redact Rect Arrow Text / Pen Highlight Crop Copy-text
+/// Undo Copy Save / colours, stroke width, Redo, text-recognition status, Close.
 /// </summary>
 internal sealed class Toolbar : IDisposable
 {
-    internal enum Kind { Tool, Undo, Redo, Copy, Save, Color, Width, Close }
+    internal enum Kind { Tool, Undo, Redo, Copy, Save, Color, Width, Close, CopyText, Status }
 
     internal sealed record Button(Kind Kind, string Label, string Tip, Rectangle Bounds, ToolKind Tool = default, int Index = 0);
 
-    private static readonly (string Label, ToolKind Tool, string Key)[] ToolRow =
+    private const int Columns = 7;
+
+    private static readonly (string Label, ToolKind Tool, string Tip)[] ToolRow =
     {
-        ("Blur", ToolKind.Blur, "B"), ("Pixelate", ToolKind.Pixelate, "X"), ("Redact", ToolKind.Redact, "R"),
-        ("Rect", ToolKind.Rect, "U"), ("Arrow", ToolKind.Arrow, "A"), ("Text", ToolKind.Text, "T"),
+        ("Select", ToolKind.SelectText, "Select text (S) · right-click for options"),
+        ("Blur", ToolKind.Blur, "Blur (B)"), ("Pixelate", ToolKind.Pixelate, "Pixelate (X)"), ("Redact", ToolKind.Redact, "Redact (R)"),
+        ("Rect", ToolKind.Rect, "Rectangle (U)"), ("Arrow", ToolKind.Arrow, "Arrow (A)"), ("Text", ToolKind.Text, "Text (T)"),
     };
 
     private static readonly string[] ColorNames = { "Red", "Yellow", "Green", "Blue", "Black", "White" };
@@ -45,7 +48,7 @@ internal sealed class Toolbar : IDisposable
         _monitor = monitor;
 
         int bw = P(64), bh = P(28), sh = P(22), gap = P(4), pad = P(6), margin = P(8);
-        int width = pad * 2 + bw * 6 + gap * 5;
+        int width = pad * 2 + bw * Columns + gap * (Columns - 1);
         int height = pad * 2 + bh * 2 + sh + gap * 2;
 
         // Below the selection, else above it, else inside its bottom edge; never across monitors.
@@ -64,14 +67,15 @@ internal sealed class Toolbar : IDisposable
         for (int i = 0; i < ToolRow.Length; i++)
         {
             var t = ToolRow[i];
-            _buttons.Add(new Button(Kind.Tool, t.Label, $"{t.Label} ({t.Key})", Cell(i, row1, bh), t.Tool));
+            _buttons.Add(new Button(Kind.Tool, t.Label, t.Tip, Cell(i, row1, bh), t.Tool));
         }
         _buttons.Add(new Button(Kind.Tool, "Pen", "Pen (P)", Cell(0, row2, bh), ToolKind.Pen));
         _buttons.Add(new Button(Kind.Tool, "Highlight", "Highlighter (H)", Cell(1, row2, bh), ToolKind.Highlight));
         _buttons.Add(new Button(Kind.Tool, "Crop", "Crop (C)", Cell(2, row2, bh), ToolKind.Crop));
-        _buttons.Add(new Button(Kind.Undo, "Undo", "Undo (Ctrl+Z)", Cell(3, row2, bh)));
-        _buttons.Add(new Button(Kind.Copy, "Copy", "Copy and close (Ctrl+C / Enter)", Cell(4, row2, bh)));
-        _buttons.Add(new Button(Kind.Save, "Save", "Save and close (Ctrl+S)", Cell(5, row2, bh)));
+        _buttons.Add(new Button(Kind.CopyText, "Copy text", "Copy selected text, or all text if none is selected", Cell(3, row2, bh)));
+        _buttons.Add(new Button(Kind.Undo, "Undo", "Undo (Ctrl+Z)", Cell(4, row2, bh)));
+        _buttons.Add(new Button(Kind.Copy, "Copy", "Copy image and close (Enter)", Cell(5, row2, bh)));
+        _buttons.Add(new Button(Kind.Save, "Save", "Save and close (Ctrl+S)", Cell(6, row2, bh)));
 
         int half = (bw - gap) / 2;
         Rectangle Half(int column, int span = 1) => new(x + pad + column * (half + gap), row3, half * span + gap * (span - 1), sh);
@@ -80,14 +84,15 @@ internal sealed class Toolbar : IDisposable
         for (int i = 0; i < WidthLabels.Length; i++)
             _buttons.Add(new Button(Kind.Width, WidthLabels[i], "Stroke width ([ and ])", Half(6 + i), Index: i));
         _buttons.Add(new Button(Kind.Redo, "↷", "Redo (Ctrl+Y)", Half(9)));
-        _buttons.Add(new Button(Kind.Close, "Close", "Cancel (Esc)", Half(10, 2)));
+        _buttons.Add(new Button(Kind.Status, "", "Text recognition", Half(10, 2)));
+        _buttons.Add(new Button(Kind.Close, "Close", "Cancel (Esc)", Half(12, 2)));
     }
 
     public Button? HitTest(Point p)
     {
         if (!Bounds.Contains(p)) return null;
         foreach (var b in _buttons)
-            if (b.Bounds.Contains(p)) return b;
+            if (b.Kind != Kind.Status && b.Bounds.Contains(p)) return b;
         return null;
     }
 
@@ -103,7 +108,7 @@ internal sealed class Toolbar : IDisposable
     }
 
     public void Paint(Graphics g, ToolKind tool, int colorIndex, int widthIndex, IReadOnlyList<Color> palette,
-        Button? hover, bool canUndo, bool canRedo)
+        Button? hover, bool canUndo, bool canRedo, string status, bool hasText)
     {
         if (Bounds.IsEmpty) return;
         var smoothing = g.SmoothingMode;
@@ -138,10 +143,22 @@ internal sealed class Toolbar : IDisposable
                 }
                 continue;
             }
+            if (b.Kind == Kind.Status)
+            {
+                TextRenderer.DrawText(g, status, Font, b.Bounds, Color.FromArgb(170, 170, 178), centered);
+                continue;
+            }
 
             bool isActive = (b.Kind == Kind.Tool && b.Tool == tool) || (b.Kind == Kind.Width && b.Index == widthIndex);
             Drawing.FillRoundRect(g, isActive ? active : isHover ? hovered : normal, b.Bounds, P(5));
-            bool enabled = b.Kind switch { Kind.Undo => canUndo, Kind.Redo => canRedo, _ => true };
+            bool enabled = b.Kind switch
+            {
+                Kind.Undo => canUndo,
+                Kind.Redo => canRedo,
+                Kind.CopyText => hasText,
+                Kind.Tool when b.Tool == ToolKind.SelectText => hasText,
+                _ => true,
+            };
             var color = enabled ? Color.White : Color.FromArgb(110, 110, 118);
             TextRenderer.DrawText(g, b.Label, Font, b.Bounds, color, centered);
         }
