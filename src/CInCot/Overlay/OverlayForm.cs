@@ -63,7 +63,7 @@ internal sealed class OverlayForm : Form
     private readonly SortedSet<int> _textSelection = new();
     private int _anchorWord = -1;
     private readonly ContextMenuStrip _menu = new() { ShowImageMargin = false };
-    private readonly ToolStripMenuItem _menuCopyText, _menuSelectAll, _menuRedact, _menuBlur, _menuPixelate;
+    private readonly ToolStripMenuItem _menuUndo, _menuRedo, _menuCopyText, _menuSelectAll, _menuRedact, _menuBlur, _menuPixelate;
     private readonly System.Windows.Forms.Timer _toastTimer = new() { Interval = 1800 };
     private string? _toast;
     private Rectangle _toastRect;
@@ -81,6 +81,8 @@ internal sealed class OverlayForm : Form
         Cursor = Cursors.Cross;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque, true);
 
+        _menuUndo = new ToolStripMenuItem("Undo", null, (_, _) => Undo()) { ShortcutKeyDisplayString = "Ctrl+Z" };
+        _menuRedo = new ToolStripMenuItem("Redo", null, (_, _) => Redo()) { ShortcutKeyDisplayString = "Ctrl+Y" };
         _menuCopyText = new ToolStripMenuItem("Copy text", null, (_, _) => CopyText()) { ShortcutKeyDisplayString = "Ctrl+C" };
         _menuSelectAll = new ToolStripMenuItem("Select all text", null, (_, _) => SelectAllText()) { ShortcutKeyDisplayString = "Ctrl+A" };
         _menuRedact = new ToolStripMenuItem("Redact selected text", null, (_, _) => RedactSelectedText(RedactionKind.Box)) { ShortcutKeyDisplayString = "Del" };
@@ -88,6 +90,7 @@ internal sealed class OverlayForm : Form
         _menuPixelate = new ToolStripMenuItem("Pixelate selected text", null, (_, _) => RedactSelectedText(RedactionKind.Pixelate));
         _menu.Items.AddRange(new ToolStripItem[]
         {
+            _menuUndo, _menuRedo, new ToolStripSeparator(),
             _menuCopyText, _menuSelectAll, new ToolStripSeparator(), _menuRedact, _menuBlur, _menuPixelate, new ToolStripSeparator(),
             new ToolStripMenuItem("Copy image and close", null, (_, _) => Export(save: false)) { ShortcutKeyDisplayString = "Enter" },
             new ToolStripMenuItem("Save image and close", null, (_, _) => Export(save: true)) { ShortcutKeyDisplayString = "Ctrl+S" },
@@ -1277,6 +1280,8 @@ internal sealed class OverlayForm : Form
         _menuCopyText.Enabled = any;
         _menuSelectAll.Enabled = any;
         _menuRedact.Enabled = _menuBlur.Enabled = _menuPixelate.Enabled = selected;
+        _menuUndo.Enabled = _doc?.CanUndo == true;
+        _menuRedo.Enabled = _doc?.CanRedo == true;
         if (!ready) _menuCopyText.Text = _ocrState == OcrState.Running ? "Reading text…" : "Copy text (OCR off)";
     }
 
