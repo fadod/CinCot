@@ -200,11 +200,28 @@ public class ShapeStyleTests
         using (var g = Graphics.FromImage(bmp))
         {
             g.Clear(Color.White);
-            new TextHighlightAnnotation(new[] { new Rectangle(10, 10, 50, 12), new Rectangle(10, 30, 30, 12) }).Render(g);
+            new TextHighlightAnnotation(new[] { new Rectangle(10, 10, 50, 12), new Rectangle(10, 30, 30, 12) }, Color.FromArgb(255, 185, 0)).Render(g);
         }
         Assert.True(bmp.GetPixel(30, 15).B < 200);   // yellow-ish inside the first band
         Assert.True(bmp.GetPixel(20, 35).B < 200);   // second band
         Assert.Equal(255, bmp.GetPixel(55, 35).B);   // right of the shorter second band stays white
+    }
+
+    [Fact]
+    public void Highlighter_uses_the_chosen_colour_see_through()
+    {
+        using var bmp = new Bitmap(60, 40);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            var green = new TextHighlightAnnotation(new[] { new Rectangle(5, 5, 20, 20) }, Color.FromArgb(16, 160, 16));
+            ((IRestylable)green).Restyle(new Stroke(Color.FromArgb(0, 120, 212), 4, LineStyle.Solid), ArrowHeads.End, ShapeKind.Rectangle).Render(g);
+            new StrokeAnnotation(new[] { new Point(40, 15), new Point(50, 15) }, Color.FromArgb(232, 17, 35), 4, highlighter: true).Render(g);
+        }
+        var blue = bmp.GetPixel(15, 15);
+        Assert.True(blue.B > blue.R + 40 && blue.R > 60);   // restyled to blue, and white shows through
+        var red = bmp.GetPixel(45, 15);
+        Assert.True(red.R > red.B + 40 && red.B > 60);       // freehand highlighter in red, see-through
     }
 
     [Fact]

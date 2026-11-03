@@ -310,7 +310,7 @@ internal sealed class OverlayForm : Form
     {
         var bands = Segments(WordRange(_highlightAnchor, word)).Select(r => Rectangle.Inflate(r, Px(2), Px(2))).ToList();
         _preview?.Dispose();
-        _preview = bands.Count > 0 ? new TextHighlightAnnotation(bands) : null;
+        _preview = bands.Count > 0 ? new TextHighlightAnnotation(bands, Palette[_colorIndex]) : null;
     }
 
     private float TextSize => Math.Min(12f + 3.5f * _strokeWidth, 90f);
@@ -326,13 +326,22 @@ internal sealed class OverlayForm : Form
     }
 
     /// <summary>
-    /// Applies the current colour/thickness/line style to the text being typed and, while the Rect or Arrow
-    /// tool is active, to the shape just drawn with it, so it can be tuned after drawing.
+    /// Applies the current colour/thickness/line style to the text being typed and to the item just drawn
+    /// with the active tool (shape, arrow, text, pen or highlighter), so it can be tuned after drawing.
+    /// The one colour choice drives lines, text and the highlighter alike.
     /// </summary>
     private void ApplyStyle()
     {
         UpdateTextPreview();
-        bool matches = (_tool == ToolKind.Rect && _lastShape is RectAnnotation) || (_tool == ToolKind.Arrow && _lastShape is ArrowAnnotation);
+        bool matches = _tool switch
+        {
+            ToolKind.Rect => _lastShape is RectAnnotation,
+            ToolKind.Arrow => _lastShape is ArrowAnnotation,
+            ToolKind.Text => _lastShape is TextAnnotation,
+            ToolKind.Pen => _lastShape is StrokeAnnotation { IsHighlighter: false },
+            ToolKind.Highlight => _lastShape is TextHighlightAnnotation or StrokeAnnotation { IsHighlighter: true },
+            _ => false,
+        };
         if (matches && _doc is not null && _doc.Items.Count > 0 && ReferenceEquals(_doc.Items[^1], _lastShape))
         {
             var replacement = ((IRestylable)_lastShape!).Restyle(CurrentStroke(), _heads, _shape);
@@ -881,7 +890,7 @@ internal sealed class OverlayForm : Form
             {
                 _preview = null;
                 _doc!.Add(highlight);
-                _lastShape = null;
+                _lastShape = highlight;
                 Invalidate(Rectangle.Inflate(highlight.Bounds, Px(4), Px(4)));
             }
         }
@@ -1031,7 +1040,11 @@ internal sealed class OverlayForm : Form
         var preview = _preview;
         _preview = null;
         _textAt = null;
-        if (preview is TextAnnotation { Text.Length: > 0 }) _doc!.Add(preview);
+        if (preview is TextAnnotation { Text.Length: > 0 })
+        {
+            _doc!.Add(preview);
+            _lastShape = preview;
+        }
         else preview?.Dispose();
         _text.Clear();
         RefreshDynamic();

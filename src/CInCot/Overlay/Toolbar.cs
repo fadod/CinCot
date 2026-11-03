@@ -124,7 +124,7 @@ internal sealed class Toolbar : IDisposable
         int row1Width = x - gap + pad;
 
         x = pad;
-        Add(Kind.ColorPicker, Glyph.Chevron, "Colour (1-9, 0)", bs + P(14), y2);
+        Add(Kind.ColorPicker, Glyph.Chevron, "Colour for lines, text and highlighter (1-9, 0)", bs + P(14), y2);
         Separator(y2);
         Add(Kind.Thinner, Glyph.Minus, "Thinner ( [ )", bs, y2);
         Add(Kind.Thickness, Glyph.Minus, "Line thickness · scroll here or Ctrl+scroll to change", P(30), y2);

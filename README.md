@@ -38,7 +38,7 @@ and needs Windows 10 1809 or later.
 | Delete (with text selected) | Black-box redact the selected text |
 | Right-click | Copy text, Select all, Redact / Blur / Pixelate selected text, Copy or Save image |
 | Double-click a word (Select tool) | Select the whole line |
-| 1-9, 0 | Colour (or click the colour button to open the 10-colour palette) |
+| 1-9, 0 | Colour for shapes, arrows, pen, text and highlighter (or click the colour button for the palette) |
 | [ ] or - + (Shift = 5 px), scroll over toolbar, Ctrl + scroll | Line thickness, 1-30 px |
 | L | Cycle line style: solid, dashed, dotted, dash-dot (Shapes and Arrow) |
 | U again (Shapes tool) | Cycle shape: rectangle, rounded, ellipse, triangle, diamond, star |
@@ -61,6 +61,12 @@ palette pop-up, and the line thickness. It also shows the text-recognition statu
 The Shapes button (U) shows the current shape. Click it again, or press U again, to open the
 dropdown: rectangle, rounded rectangle, ellipse, triangle, diamond and star. Hold Shift while
 dragging for a perfect square or circle.
+
+## One colour for everything
+
+The colour button sets the colour for shapes, arrows, pen, text and the highlighter. The highlighter
+uses a see-through version of it, so the text underneath stays readable. Pick yellow (key 3) for a
+classic highlight. Changing colour right after drawing anything recolours that item.
 
 ## Highlighter: snap to text
 

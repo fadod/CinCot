@@ -161,20 +161,30 @@ internal sealed class RectAnnotation(Rectangle rect, Stroke stroke, ShapeKind sh
     public Annotation Restyle(Stroke newStroke, ArrowHeads heads, ShapeKind newShape) => new RectAnnotation(rect, newStroke, newShape);
 }
 
-/// <summary>Highlighter bands fitted exactly to recognised words, one per run of words on a line.</summary>
-internal sealed class TextHighlightAnnotation(IReadOnlyList<Rectangle> bands) : Annotation
+/// <summary>Highlighter ink: the chosen colour, see-through so the text underneath stays readable.</summary>
+internal static class Highlighter
 {
-    public static readonly Color Ink = Color.FromArgb(110, 255, 230, 0);
+    public const int Alpha = 110;
 
+    public static Color Ink(Color color) => Color.FromArgb(Alpha, color.R, color.G, color.B);
+}
+
+/// <summary>Highlighter bands fitted exactly to recognised words, one per run of words on a line.</summary>
+internal sealed class TextHighlightAnnotation(IReadOnlyList<Rectangle> bands, Color color) : Annotation, IRestylable
+{
     public IReadOnlyList<Rectangle> Bands => bands;
+    public Color Color => color;
 
     public override Rectangle Bounds => bands.Aggregate(Rectangle.Empty, (a, b) => a.IsEmpty ? b : Rectangle.Union(a, b));
 
     public override void Render(Graphics g)
     {
-        using var brush = new SolidBrush(Ink);
+        using var brush = new SolidBrush(Highlighter.Ink(color));
         foreach (var band in bands) g.FillRectangle(brush, band);
     }
+
+    // Bands follow the words, so only the colour changes.
+    public Annotation Restyle(Stroke stroke, ArrowHeads heads, ShapeKind shape) => new TextHighlightAnnotation(bands, stroke.Color);
 }
 
 internal sealed class ArrowAnnotation(Point from, Point to, Stroke stroke, ArrowHeads heads = ArrowHeads.End) : Annotation, IRestylable
@@ -227,10 +237,14 @@ internal sealed class ArrowAnnotation(Point from, Point to, Stroke stroke, Arrow
 }
 
 /// <summary>Freehand pen or highlighter stroke.</summary>
-internal sealed class StrokeAnnotation(IReadOnlyList<Point> points, Color color, float width, bool highlighter) : Annotation
+internal sealed class StrokeAnnotation(IReadOnlyList<Point> points, Color color, float width, bool highlighter) : Annotation, IRestylable
 {
-    private Color InkColor => highlighter ? Color.FromArgb(110, 255, 230, 0) : color;
+    public bool IsHighlighter => highlighter;
+    public Color Color => color;
+    private Color InkColor => highlighter ? Highlighter.Ink(color) : color;
     private float InkWidth => highlighter ? Math.Max(width * 4f, 16f) : width;
+
+    public Annotation Restyle(Stroke stroke, ArrowHeads heads, ShapeKind shape) => new StrokeAnnotation(points, stroke.Color, stroke.Width, highlighter);
 
     public override Rectangle Bounds => BoundsOf(points, InkWidth);
 
@@ -250,7 +264,7 @@ internal sealed class StrokeAnnotation(IReadOnlyList<Point> points, Color color,
     }
 }
 
-internal sealed class TextAnnotation : Annotation
+internal sealed class TextAnnotation : Annotation, IRestylable
 {
     private static readonly FontFamily Family = FontFamily.Families.FirstOrDefault(f => f.Name == "Segoe UI") ?? FontFamily.GenericSansSerif;
     private readonly GraphicsPath _path = new();
@@ -290,6 +304,9 @@ internal sealed class TextAnnotation : Annotation
         using var brush = new SolidBrush(_color);
         g.FillPath(brush, _path);
     }
+
+    // Recolours only; the size was chosen while typing.
+    public Annotation Restyle(Stroke stroke, ArrowHeads heads, ShapeKind shape) => new TextAnnotation(At, Text, stroke.Color, _size);
 
     public override void Dispose() => _path.Dispose();
 }
