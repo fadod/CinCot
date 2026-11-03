@@ -18,7 +18,7 @@ internal static class Icons
 {
     private static readonly Color HighlighterYellow = Color.FromArgb(255, 212, 0);
 
-    public static void Draw(Graphics g, Glyph glyph, Rectangle box, Color ink, float size)
+    public static void Draw(Graphics g, Glyph glyph, Rectangle box, Color ink, float size, Color? marker = null)
     {
         var state = g.Save();
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -27,12 +27,16 @@ internal static class Icons
         g.ScaleTransform(size / 24f, size / 24f);
         using var pen = new Pen(ink, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
         using var brush = new SolidBrush(ink);
+        // Highlighter glyphs show the chosen highlight colour; a dark colour gets a light rim so it stays visible.
+        var mark = marker ?? HighlighterYellow;
+        bool darkMark = (0.299f * mark.R + 0.587f * mark.G + 0.114f * mark.B) / 255f < 0.3f;
+        using var rim = new Pen(Color.FromArgb(130, ink), 1f);
 
         switch (glyph)
         {
             case Glyph.SelectText:
-                using (var mark = new SolidBrush(Color.FromArgb(110, OverlayForm.Accent)))
-                    g.FillRectangle(mark, 2.5f, 9f, 15f, 6f);
+                using (var selection = new SolidBrush(Color.FromArgb(110, OverlayForm.Accent)))
+                    g.FillRectangle(selection, 2.5f, 9f, 15f, 6f);
                 g.DrawLine(pen, 4, 5, 20, 5);
                 g.DrawLine(pen, 4, 12, 16, 12);
                 g.DrawLine(pen, 4, 19, 14, 19);
@@ -89,8 +93,9 @@ internal static class Icons
             case Glyph.Highlight:
                 g.DrawPolygon(pen, new[] { new PointF(14, 3.5f), new PointF(20.5f, 10), new PointF(13.5f, 17), new PointF(8.5f, 17), new PointF(7, 15.5f), new PointF(7, 10.5f) });
                 g.DrawLine(pen, 7, 15.5f, 5, 17.5f);
-                using (var yellow = new SolidBrush(HighlighterYellow))
+                using (var yellow = new SolidBrush(mark))
                     g.FillRectangle(yellow, 3f, 19.5f, 18f, 2.6f);
+                if (darkMark) g.DrawRectangle(rim, 3f, 19.5f, 18f, 2.6f);
                 break;
 
             case Glyph.Crop:
@@ -185,15 +190,23 @@ internal static class Icons
             }
 
             case Glyph.Freehand:
-                using (var band = new Pen(Color.FromArgb(200, HighlighterYellow), 4.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                if (darkMark)
+                    using (var halo = new Pen(Color.FromArgb(130, ink), 6.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                        g.DrawBezier(halo, new PointF(3.5f, 16), new PointF(8, 5), new PointF(14, 21), new PointF(20.5f, 8));
+                using (var band = new Pen(Color.FromArgb(220, mark), 4.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                     g.DrawBezier(band, new PointF(3.5f, 16), new PointF(8, 5), new PointF(14, 21), new PointF(20.5f, 8));
                 break;
 
             case Glyph.SnapText:
-                using (var band = new SolidBrush(Color.FromArgb(200, HighlighterYellow)))
+                using (var band = new SolidBrush(Color.FromArgb(220, mark)))
                 {
                     g.FillRectangle(band, 2.5f, 3.5f, 19f, 6.5f);
                     g.FillRectangle(band, 2.5f, 14f, 12f, 6.5f);
+                }
+                if (darkMark)
+                {
+                    g.DrawRectangle(rim, 2.5f, 3.5f, 19f, 6.5f);
+                    g.DrawRectangle(rim, 2.5f, 14f, 12f, 6.5f);
                 }
                 using (var text = new Pen(ink, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 {

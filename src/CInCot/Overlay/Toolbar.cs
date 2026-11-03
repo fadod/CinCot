@@ -323,7 +323,7 @@ internal sealed class Toolbar : IDisposable
                     break;
                 }
                 default:
-                    Icons.Draw(g, b.Glyph, b.Bounds, color, iconSize);
+                    Icons.Draw(g, b.Glyph, b.Bounds, color, iconSize, palette[state.ColorIndex]);
                     break;
             }
         }
