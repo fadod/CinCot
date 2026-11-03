@@ -108,7 +108,22 @@ public class ToolbarTests
         Assert.True(monitor.Contains(toolbar.Bounds));
         Assert.DoesNotContain(toolbar.Buttons, b => b.Kind is Toolbar.Kind.Line or Toolbar.Kind.Heads or Toolbar.Kind.Corners);
         Assert.Equal(14, toolbar.Buttons.Count(b => b.Kind is Toolbar.Kind.Tool or Toolbar.Kind.Undo or Toolbar.Kind.Copy or Toolbar.Kind.Save or Toolbar.Kind.CopyText));
-        Assert.Null(toolbar.HitTest(toolbar.Buttons.Single(b => b.Kind == Toolbar.Kind.Status).Bounds.Location + new Size(2, 2)));
+        Assert.Single(toolbar.Buttons, b => b.Kind == Toolbar.Kind.ColorPicker);
+        Assert.DoesNotContain(toolbar.Buttons, b => b.Kind == Toolbar.Kind.Color);
+    }
+
+    [Fact]
+    public void Colour_button_opens_a_ten_colour_popup_on_screen()
+    {
+        using var toolbar = new Toolbar { ColorPopupOpen = true };
+        var monitor = new Rectangle(0, 0, 1920, 1080);
+        toolbar.Layout(new Rectangle(100, 0, 600, 80), monitor, 1f, ToolKind.Rect);
+
+        Assert.Equal(10, toolbar.Buttons.Count(b => b.Kind == Toolbar.Kind.Color));
+        Assert.True(monitor.Contains(toolbar.PopupBounds));
+        Assert.False(toolbar.PopupBounds.IntersectsWith(toolbar.Bounds));
+        var swatch = toolbar.Buttons.First(b => b.Kind == Toolbar.Kind.Color && b.Index == 4);
+        Assert.Same(swatch, toolbar.HitTest(new Point(swatch.Bounds.X + 5, swatch.Bounds.Y + 5)));
     }
 }
 

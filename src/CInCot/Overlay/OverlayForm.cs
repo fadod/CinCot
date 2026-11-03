@@ -26,8 +26,9 @@ internal sealed class OverlayForm : Form
     internal static readonly Color Accent = Color.FromArgb(0, 120, 212);
     internal static readonly Color[] Palette =
     {
-        Color.FromArgb(232, 17, 35), Color.FromArgb(255, 185, 0), Color.FromArgb(16, 160, 16),
-        Color.FromArgb(0, 120, 212), Color.Black, Color.White,
+        Color.FromArgb(232, 17, 35), Color.FromArgb(247, 99, 12), Color.FromArgb(255, 185, 0), Color.FromArgb(16, 160, 16),
+        Color.FromArgb(0, 178, 148), Color.FromArgb(0, 120, 212), Color.FromArgb(136, 23, 152), Color.FromArgb(227, 0, 140),
+        Color.Black, Color.White,
     };
     internal const float MinStroke = 1f, MaxStroke = 30f;
     private const string Hint = "Drag to select  ·  Click a window  ·  Hold B / X / R while dragging to start redacting  ·  Esc to cancel";
@@ -149,6 +150,7 @@ internal sealed class OverlayForm : Form
         Log.Trace($"dim {watch.ElapsedMilliseconds} ms");
         _doc = new AnnotationDocument();
         _tool = _settings.DefaultTool;
+        _toolbar.ColorPopupOpen = false;
         _drag = DragKind.None;
         _preview = null;
         _stroke = null;
@@ -286,6 +288,17 @@ internal sealed class OverlayForm : Form
         _toolbar.Layout(sel, _frame.MonitorAt(anchor).Bounds, _scale, _tool);
     }
 
+    private void SetColorPopup(bool open)
+    {
+        if (_toolbar.ColorPopupOpen == open) return;
+        var before = _toolbar.FullBounds;
+        _toolbar.ColorPopupOpen = open;
+        _hoverButton = null;
+        LayoutToolbar();
+        Invalidate(before);
+        RefreshDynamic();
+    }
+
     private float TextSize => Math.Min(12f + 3.5f * _strokeWidth, 90f);
 
     private Stroke CurrentStroke() => new(Palette[_colorIndex], _strokeWidth * _scale, _lineStyle);
@@ -350,7 +363,7 @@ internal sealed class OverlayForm : Form
         }
         else if (_phase == Phase.Editing)
         {
-            r = Drawing.Union(r, _toolbar.Bounds);
+            r = Drawing.Union(r, _toolbar.FullBounds);
             r = Drawing.Union(r, _toolbar.TooltipBounds(_hoverButton));
             r = Drawing.Union(r, SizeLabelRect(sel));
             if (_drag == DragKind.Resize) r = Drawing.Union(r, Rectangle.Inflate(sel, Px(8), Px(8)));
@@ -634,7 +647,11 @@ internal sealed class OverlayForm : Form
         if (e.Button == MouseButtons.Right)
         {
             if (_phase == Phase.Selecting) Finish(OverlayOutcome.Cancelled);
-            else if (_drag == DragKind.None && !_toolbar.Bounds.Contains(e.Location)) ShowContextMenu(e.Location);
+            else if (_drag == DragKind.None && !_toolbar.Contains(e.Location))
+            {
+                SetColorPopup(false);
+                ShowContextMenu(e.Location);
+            }
             return;
         }
         if (e.Button != MouseButtons.Left) return;
@@ -647,9 +664,16 @@ internal sealed class OverlayForm : Form
             return;
         }
 
-        if (_toolbar.Bounds.Contains(e.Location))
+        if (_toolbar.Contains(e.Location))
         {
             if (_toolbar.HitTest(e.Location) is { } button) OnToolbarButton(button);
+            return;
+        }
+
+        // A click anywhere else just closes the colour pop-up.
+        if (_toolbar.ColorPopupOpen)
+        {
+            SetColorPopup(false);
             return;
         }
 
@@ -763,7 +787,7 @@ internal sealed class OverlayForm : Form
         base.OnMouseWheel(e);
         // Scroll over the toolbar, or Ctrl+scroll anywhere, to change line thickness.
         if (_phase != Phase.Editing || _drag != DragKind.None) return;
-        if (!_toolbar.Bounds.Contains(e.Location) && !ModifierKeys.HasFlag(Keys.Control)) return;
+        if (!_toolbar.Contains(e.Location) && !ModifierKeys.HasFlag(Keys.Control)) return;
         ChangeThickness(Math.Sign(e.Delta));
     }
 
@@ -828,7 +852,7 @@ internal sealed class OverlayForm : Form
     private void UpdateEditingHover(Point p)
     {
         _hoverButton = _toolbar.HitTest(p);
-        if (_toolbar.Bounds.Contains(p))
+        if (_toolbar.Contains(p))
         {
             SetCursor(Cursors.Hand);
             return;
@@ -997,7 +1021,8 @@ internal sealed class OverlayForm : Form
             case Toolbar.Kind.Copy: Export(save: false); break;
             case Toolbar.Kind.CopyText: CopyText(); break;
             case Toolbar.Kind.Save: Export(save: true); break;
-            case Toolbar.Kind.Color: _colorIndex = button.Index; ApplyStyle(); break;
+            case Toolbar.Kind.ColorPicker: SetColorPopup(!_toolbar.ColorPopupOpen); break;
+            case Toolbar.Kind.Color: _colorIndex = button.Index; SetColorPopup(false); ApplyStyle(); break;
             case Toolbar.Kind.Thinner: ChangeThickness(-1); break;
             case Toolbar.Kind.Thicker: ChangeThickness(1); break;
             case Toolbar.Kind.Line: _lineStyle = (LineStyle)button.Index; ApplyStyle(); break;
@@ -1043,7 +1068,8 @@ internal sealed class OverlayForm : Form
         switch (e.KeyCode)
         {
             case Keys.Escape:
-                if (editing && _textSelection.Count > 0) SetTextSelection(Array.Empty<int>());
+                if (editing && _toolbar.ColorPopupOpen) SetColorPopup(false);
+                else if (editing && _textSelection.Count > 0) SetTextSelection(Array.Empty<int>());
                 else Finish(OverlayOutcome.Cancelled);
                 break;
             case Keys.A when e.Control && editing:
@@ -1084,8 +1110,9 @@ internal sealed class OverlayForm : Form
                 _lineStyle = (LineStyle)(((int)_lineStyle + 1) % 4);
                 ApplyStyle();
                 break;
-            case >= Keys.D1 and <= Keys.D6 when editing && !e.Control:
-                _colorIndex = e.KeyCode - Keys.D1;
+            case >= Keys.D0 and <= Keys.D9 when editing && !e.Control:
+                _colorIndex = e.KeyCode == Keys.D0 ? 9 : e.KeyCode - Keys.D1;
+                SetColorPopup(false);
                 ApplyStyle();
                 break;
             default:
