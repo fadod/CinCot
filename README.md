@@ -1,10 +1,23 @@
 # CInCot
 
-Instant screenshots with redaction built in. Press **PrtSc**: the screen freezes and dims, you drag a
-region, and the toolbar is already there. Blur, pixelate or black-box anything sensitive, then
-**Enter** to copy. You don't have to open an editor or save first.
+**Fast Windows screenshot tool with instant, on-screen redaction.**
 
-This is the Phase 1 MVP of the SwiftShot/CInCot design spec.
+Press **PrtSc**: the screen freezes and dims, you drag a region, and the toolbar is already there.
+Blur, pixelate or black-box anything sensitive, then press **Enter** to copy. You don't open an
+editor, and you don't save first.
+
+- **Fast capture:** DXGI desktop duplication freezes the screen in about 60 ms, across every monitor
+  and DPI.
+- **Redaction:** blur, pixelate and black-box, flattened into the pixels so they can't be undone in
+  the exported image.
+- **Text:** on-device OCR (nothing is uploaded). Select, copy or redact recognised text, or
+  right-click for options.
+- **Annotate:** shapes (rectangle, ellipse, triangle, diamond, star), arrows, text, pen, and a
+  highlighter that can snap to words. All have adjustable thickness, line styles and 10 colours.
+- **Editing:** unlimited undo/redo. Copy to the clipboard or save to PNG/JPG.
+
+Built with C# .NET 8 (WinForms, Direct3D 11 via Vortice, Windows.Media.Ocr). It runs from the tray
+and needs Windows 10 1809 or later.
 
 ## Hotkeys
 
