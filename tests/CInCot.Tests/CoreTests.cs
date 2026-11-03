@@ -106,7 +106,10 @@ public class ToolbarTests
 
         toolbar.Layout(new Rectangle(0, 0, 1920, 1080), monitor, 1f, ToolKind.Pixelate);
         Assert.True(monitor.Contains(toolbar.Bounds));
-        Assert.DoesNotContain(toolbar.Buttons, b => b.Kind is Toolbar.Kind.Line or Toolbar.Kind.Heads or Toolbar.Kind.Corners);
+        Assert.DoesNotContain(toolbar.Buttons, b => b.Kind is Toolbar.Kind.Line or Toolbar.Kind.Heads or Toolbar.Kind.HighlightMode);
+
+        toolbar.Layout(new Rectangle(0, 0, 900, 500), monitor, 1f, ToolKind.Highlight);
+        Assert.Equal(2, toolbar.Buttons.Count(b => b.Kind == Toolbar.Kind.HighlightMode));
         Assert.Equal(14, toolbar.Buttons.Count(b => b.Kind is Toolbar.Kind.Tool or Toolbar.Kind.Undo or Toolbar.Kind.Copy or Toolbar.Kind.Save or Toolbar.Kind.CopyText));
         Assert.Single(toolbar.Buttons, b => b.Kind == Toolbar.Kind.ColorPicker);
         Assert.DoesNotContain(toolbar.Buttons, b => b.Kind == Toolbar.Kind.Color);
@@ -140,19 +143,68 @@ public class ShapeStyleTests
         Annotation current = drawn;
         for (int w = 3; w <= 6; w++)
         {
-            var next = ((IRestylable)current).Restyle(new Stroke(Color.Red, w, LineStyle.Dashed), ArrowHeads.End, rounded: true);
+            var next = ((IRestylable)current).Restyle(new Stroke(Color.Red, w, LineStyle.Dashed), ArrowHeads.End, ShapeKind.Ellipse);
             doc.Replace(current, next);
             current = next;
         }
         var final = Assert.IsType<RectAnnotation>(Assert.Single(doc.Items));
         Assert.Equal(6, final.Stroke.Width);
         Assert.Equal(LineStyle.Dashed, final.Stroke.Style);
-        Assert.True(final.Rounded);
+        Assert.Equal(ShapeKind.Ellipse, final.Shape);
 
         Assert.True(doc.Undo());
         Assert.Same(drawn, Assert.Single(doc.Items));
         Assert.True(doc.Redo());
         Assert.Same(final, Assert.Single(doc.Items));
+    }
+
+    [Fact]
+    public void Shape_dropdown_lists_all_shapes()
+    {
+        using var toolbar = new Toolbar { Popup = ToolbarPopup.Shape };
+        var monitor = new Rectangle(0, 0, 1920, 1080);
+        toolbar.Layout(new Rectangle(100, 300, 600, 300), monitor, 1f, ToolKind.Rect);
+        Assert.Equal(Enum.GetValues<ShapeKind>().Length, toolbar.Buttons.Count(b => b.Kind == Toolbar.Kind.Shape));
+        Assert.True(monitor.Contains(toolbar.PopupBounds));
+    }
+
+    [Theory]
+    [InlineData(ShapeKind.Ellipse)]
+    [InlineData(ShapeKind.Triangle)]
+    [InlineData(ShapeKind.Diamond)]
+    [InlineData(ShapeKind.Star)]
+    public void Shapes_stay_inside_their_box(ShapeKind shape)
+    {
+        using var bmp = new Bitmap(120, 120);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            new RectAnnotation(new Rectangle(20, 20, 80, 80), new Stroke(Color.Black, 2, LineStyle.Solid), shape).Render(g);
+        }
+        int inside = 0, outside = 0;
+        for (int y = 0; y < 120; y++)
+            for (int x = 0; x < 120; x++)
+                if (bmp.GetPixel(x, y).R < 128)
+                {
+                    if (x >= 17 && x <= 103 && y >= 17 && y <= 103) inside++;
+                    else outside++;
+                }
+        Assert.True(inside > 100);
+        Assert.Equal(0, outside);
+    }
+
+    [Fact]
+    public void Text_highlight_fills_only_its_bands()
+    {
+        using var bmp = new Bitmap(100, 60);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            new TextHighlightAnnotation(new[] { new Rectangle(10, 10, 50, 12), new Rectangle(10, 30, 30, 12) }).Render(g);
+        }
+        Assert.True(bmp.GetPixel(30, 15).B < 200);   // yellow-ish inside the first band
+        Assert.True(bmp.GetPixel(20, 35).B < 200);   // second band
+        Assert.Equal(255, bmp.GetPixel(55, 35).B);   // right of the shorter second band stays white
     }
 
     [Fact]

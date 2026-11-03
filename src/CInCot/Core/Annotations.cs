@@ -91,34 +91,90 @@ internal readonly record struct Stroke(Color Color, float Width, LineStyle Style
     }
 }
 
+public enum ShapeKind { Rectangle, RoundedRectangle, Ellipse, Triangle, Diamond, Star }
+
 /// <summary>An annotation whose colour, thickness and line style can be changed after it is drawn.</summary>
 internal interface IRestylable
 {
-    Annotation Restyle(Stroke stroke, ArrowHeads heads, bool rounded);
+    Annotation Restyle(Stroke stroke, ArrowHeads heads, ShapeKind shape);
 }
 
-internal sealed class RectAnnotation(Rectangle rect, Stroke stroke, bool rounded = false) : Annotation, IRestylable
+/// <summary>An outline shape fitted to a dragged rectangle: rectangle, rounded rectangle, ellipse, triangle, diamond or star.</summary>
+internal sealed class RectAnnotation(Rectangle rect, Stroke stroke, ShapeKind shape = ShapeKind.Rectangle) : Annotation, IRestylable
 {
     public RectAnnotation(Rectangle rect, Color color, float width) : this(rect, new Stroke(color, width, LineStyle.Solid)) { }
 
     public Stroke Stroke => stroke;
-    public bool Rounded => rounded;
-    public override Rectangle Bounds => Rectangle.Inflate(rect, (int)stroke.Width + 1, (int)stroke.Width + 1);
+    public ShapeKind Shape => shape;
+    public override Rectangle Bounds => Rectangle.Inflate(rect, (int)stroke.Width * 2 + 1, (int)stroke.Width * 2 + 1);
 
     public override void Render(Graphics g)
     {
         using var pen = stroke.CreatePen();
-        if (!rounded)
+        switch (shape)
         {
-            g.DrawRectangle(pen, rect);
-            return;
+            case ShapeKind.Rectangle:
+                g.DrawRectangle(pen, rect);
+                break;
+            case ShapeKind.RoundedRectangle:
+            {
+                float radius = Math.Min(Math.Max(stroke.Width * 3f, 10f), Math.Min(rect.Width, rect.Height) / 2f);
+                using var path = Overlay.Drawing.RoundRect(rect, radius);
+                g.DrawPath(pen, path);
+                break;
+            }
+            case ShapeKind.Ellipse:
+                g.DrawEllipse(pen, rect);
+                break;
+            default:
+                if (rect.Width > 0 && rect.Height > 0) g.DrawPolygon(pen, Outline(shape, rect));
+                break;
         }
-        float radius = Math.Min(Math.Max(stroke.Width * 3f, 10f), Math.Min(rect.Width, rect.Height) / 2f);
-        using var path = Overlay.Drawing.RoundRect(rect, radius);
-        g.DrawPath(pen, path);
     }
 
-    public Annotation Restyle(Stroke newStroke, ArrowHeads heads, bool newRounded) => new RectAnnotation(rect, newStroke, newRounded);
+    /// <summary>The polygon for the pointed shapes, fitted to <paramref name="r"/>.</summary>
+    internal static PointF[] Outline(ShapeKind shape, RectangleF r)
+    {
+        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+        switch (shape)
+        {
+            case ShapeKind.Triangle:
+                return new[] { new PointF(cx, r.Top), new PointF(r.Right, r.Bottom), new PointF(r.Left, r.Bottom) };
+            case ShapeKind.Diamond:
+                return new[] { new PointF(cx, r.Top), new PointF(r.Right, cy), new PointF(cx, r.Bottom), new PointF(r.Left, cy) };
+            default:
+            {
+                // Five-pointed star, point up. A unit star spans x ±0.951 and y -1..0.809; map that onto the box.
+                var points = new PointF[10];
+                for (int i = 0; i < 10; i++)
+                {
+                    double angle = -Math.PI / 2 + i * Math.PI / 5;
+                    double k = i % 2 == 0 ? 1 : 0.42;
+                    double nx = Math.Cos(angle) * k, ny = Math.Sin(angle) * k;
+                    points[i] = new PointF(cx + (float)(nx / 0.951) * r.Width / 2, r.Top + (float)((ny + 1) / 1.809) * r.Height);
+                }
+                return points;
+            }
+        }
+    }
+
+    public Annotation Restyle(Stroke newStroke, ArrowHeads heads, ShapeKind newShape) => new RectAnnotation(rect, newStroke, newShape);
+}
+
+/// <summary>Highlighter bands fitted exactly to recognised words, one per run of words on a line.</summary>
+internal sealed class TextHighlightAnnotation(IReadOnlyList<Rectangle> bands) : Annotation
+{
+    public static readonly Color Ink = Color.FromArgb(110, 255, 230, 0);
+
+    public IReadOnlyList<Rectangle> Bands => bands;
+
+    public override Rectangle Bounds => bands.Aggregate(Rectangle.Empty, (a, b) => a.IsEmpty ? b : Rectangle.Union(a, b));
+
+    public override void Render(Graphics g)
+    {
+        using var brush = new SolidBrush(Ink);
+        foreach (var band in bands) g.FillRectangle(brush, band);
+    }
 }
 
 internal sealed class ArrowAnnotation(Point from, Point to, Stroke stroke, ArrowHeads heads = ArrowHeads.End) : Annotation, IRestylable
@@ -167,7 +223,7 @@ internal sealed class ArrowAnnotation(Point from, Point to, Stroke stroke, Arrow
         };
     }
 
-    public Annotation Restyle(Stroke newStroke, ArrowHeads newHeads, bool rounded) => new ArrowAnnotation(from, to, newStroke, newHeads);
+    public Annotation Restyle(Stroke newStroke, ArrowHeads newHeads, ShapeKind shape) => new ArrowAnnotation(from, to, newStroke, newHeads);
 }
 
 /// <summary>Freehand pen or highlighter stroke.</summary>

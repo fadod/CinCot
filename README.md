@@ -27,7 +27,9 @@ This is the Phase 1 MVP of the SwiftShot/CInCot design spec.
 | Double-click a word (Select tool) | Select the whole line |
 | 1-9, 0 | Colour (or click the colour button to open the 10-colour palette) |
 | [ ] or - + (Shift = 5 px), scroll over toolbar, Ctrl + scroll | Line thickness, 1-30 px |
-| L | Cycle line style: solid, dashed, dotted, dash-dot (Rect and Arrow) |
+| L | Cycle line style: solid, dashed, dotted, dash-dot (Shapes and Arrow) |
+| U again (Shapes tool) | Cycle shape: rectangle, rounded, ellipse, triangle, diamond, star |
+| G (Highlighter) | Toggle snap-to-text / freehand |
 | Arrow keys (Shift = 10 px) | Nudge the selection |
 | Shift while drawing | Square shapes, 45° arrows, straight strokes |
 
@@ -41,9 +43,23 @@ text, Blur, Pixelate, Redact, then Rect, Arrow, Text, Pen, Highlighter, Crop, th
 finally Copy text, Copy image, Save and Close. The second row holds the colour button, which opens a
 palette pop-up, and the line thickness. It also shows the text-recognition status.
 
-## Rectangle and arrow styles
+## Shapes
 
-When the Rect or Arrow tool is active, the second toolbar row also shows the line styles. It offers four line styles
+The Shapes button (U) shows the current shape. Click it again, or press U again, to open the
+dropdown: rectangle, rounded rectangle, ellipse, triangle, diamond and star. Hold Shift while
+dragging for a perfect square or circle.
+
+## Highlighter: snap to text
+
+With the Highlighter (H) selected, the second row has two modes. In **snap to text** mode (the
+default), starting a drag on a word highlights exactly the recognised words up to where you release,
+one neat band per line. Starting on empty space still draws a freehand stroke. **Freehand** mode always
+draws freely. Press G to switch modes. Snapping needs text recognition to have finished
+("N words" in the toolbar).
+
+## Line and arrow styles
+
+When the Shapes or Arrow tool is active, the second toolbar row also shows the line styles. It offers four line styles
 (solid, dashed, dotted, dash-dot), square or rounded corners for rectangles, and an arrowhead at the
 end, at both ends or none for arrows. Thickness is the − / value / + control in the bottom row.
 Changing colour, thickness or style right after drawing a rectangle or arrow restyles that shape.

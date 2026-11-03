@@ -7,6 +7,7 @@ internal enum Glyph
     SelectText, Blur, Pixelate, Redact, Rect, Arrow, Text, Pen, Highlight, Crop,
     Undo, Redo, CopyText, Copy, Save, Close, Minus, Plus,
     HeadEnd, HeadBoth, HeadNone, Square, Rounded, Chevron,
+    Ellipse, Triangle, Diamond, Star, Freehand, SnapText,
 }
 
 /// <summary>
@@ -168,9 +169,51 @@ internal static class Icons
             case Glyph.Chevron:
                 g.DrawLines(pen, new[] { new PointF(7, 9.5f), new PointF(12, 14.5f), new PointF(17, 9.5f) });
                 break;
+
+            case Glyph.Ellipse:
+                g.DrawEllipse(pen, 3.5f, 5f, 17f, 14f);
+                break;
+
+            case Glyph.Triangle:
+            case Glyph.Diamond:
+            case Glyph.Star:
+            {
+                var shape = glyph switch { Glyph.Triangle => Core.ShapeKind.Triangle, Glyph.Diamond => Core.ShapeKind.Diamond, _ => Core.ShapeKind.Star };
+                var frame = glyph == Glyph.Triangle ? new RectangleF(3.5f, 4.5f, 17f, 15f) : new RectangleF(3.5f, 3.5f, 17f, 17f);
+                g.DrawPolygon(pen, Core.RectAnnotation.Outline(shape, frame));
+                break;
+            }
+
+            case Glyph.Freehand:
+                using (var band = new Pen(Color.FromArgb(200, HighlighterYellow), 4.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                    g.DrawBezier(band, new PointF(3.5f, 16), new PointF(8, 5), new PointF(14, 21), new PointF(20.5f, 8));
+                break;
+
+            case Glyph.SnapText:
+                using (var band = new SolidBrush(Color.FromArgb(200, HighlighterYellow)))
+                {
+                    g.FillRectangle(band, 2.5f, 3.5f, 19f, 6.5f);
+                    g.FillRectangle(band, 2.5f, 14f, 12f, 6.5f);
+                }
+                using (var text = new Pen(ink, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                {
+                    g.DrawLine(text, 4.5f, 6.75f, 19.5f, 6.75f);
+                    g.DrawLine(text, 4.5f, 17.25f, 12.5f, 17.25f);
+                }
+                break;
         }
         g.Restore(state);
     }
+
+    public static Glyph For(Core.ShapeKind shape) => shape switch
+    {
+        Core.ShapeKind.RoundedRectangle => Glyph.Rounded,
+        Core.ShapeKind.Ellipse => Glyph.Ellipse,
+        Core.ShapeKind.Triangle => Glyph.Triangle,
+        Core.ShapeKind.Diamond => Glyph.Diamond,
+        Core.ShapeKind.Star => Glyph.Star,
+        _ => Glyph.Rect,
+    };
 
     private static void DrawUndo(Graphics g, Pen pen)
     {

@@ -5,8 +5,10 @@ namespace CInCot.Overlay;
 
 /// <summary>Everything the toolbar shows that can change between frames.</summary>
 internal readonly record struct ToolbarState(
-    ToolKind Tool, int ColorIndex, float StrokeWidth, LineStyle LineStyle, ArrowHeads Heads, bool Rounded,
+    ToolKind Tool, int ColorIndex, float StrokeWidth, LineStyle LineStyle, ArrowHeads Heads, ShapeKind Shape, bool HighlightSnap,
     bool CanUndo, bool CanRedo, string Status, bool HasText);
+
+internal enum ToolbarPopup { None, Color, Shape }
 
 /// <summary>
 /// The floating editing toolbar, painted directly on the overlay (no child windows), so showing it is
@@ -19,8 +21,14 @@ internal sealed class Toolbar : IDisposable
     internal enum Kind
     {
         Tool, Undo, Redo, Copy, Save, Close, CopyText,
-        ColorPicker, Color, Thinner, Thicker, Thickness, Line, Heads, Corners, Status,
+        ColorPicker, Color, Thinner, Thicker, Thickness, Line, Heads, Shape, HighlightMode, Status,
     }
+
+    internal static readonly (ShapeKind Shape, string Name)[] Shapes =
+    {
+        (ShapeKind.Rectangle, "Rectangle"), (ShapeKind.RoundedRectangle, "Rounded rectangle"), (ShapeKind.Ellipse, "Ellipse · Shift for a circle"),
+        (ShapeKind.Triangle, "Triangle"), (ShapeKind.Diamond, "Diamond"), (ShapeKind.Star, "Star"),
+    };
 
     internal sealed record Button(Kind Kind, Glyph Glyph, string Tip, Rectangle Bounds, ToolKind Tool = default, int Index = 0);
 
@@ -34,7 +42,7 @@ internal sealed class Toolbar : IDisposable
 
     private static readonly (Glyph Glyph, ToolKind Tool, string Tip)[] DrawTools =
     {
-        (Glyph.Rect, ToolKind.Rect, "Rectangle (U)"),
+        (Glyph.Rect, ToolKind.Rect, "Shapes (U) · click again for circle, triangle, star…"),
         (Glyph.Arrow, ToolKind.Arrow, "Arrow (A)"),
         (Glyph.Text, ToolKind.Text, "Text (T)"),
         (Glyph.Pen, ToolKind.Pen, "Pen (P)"),
@@ -57,7 +65,13 @@ internal sealed class Toolbar : IDisposable
     /// <summary>The colour palette pop-up, or empty when it is closed.</summary>
     public Rectangle PopupBounds { get; private set; }
 
-    public bool ColorPopupOpen { get; set; }
+    public ToolbarPopup Popup { get; set; }
+
+    public bool ColorPopupOpen
+    {
+        get => Popup == ToolbarPopup.Color;
+        set => Popup = value ? ToolbarPopup.Color : Popup == ToolbarPopup.Color ? ToolbarPopup.None : Popup;
+    }
     public IReadOnlyList<Button> Buttons => _buttons;
     public Font Font => _font ??= MakeFont(1f);
 
@@ -66,7 +80,7 @@ internal sealed class Toolbar : IDisposable
 
     private int P(float v) => (int)Math.Round(v * _scale);
 
-    public static bool HasStyleRow(ToolKind tool) => tool is ToolKind.Rect or ToolKind.Arrow;
+    public static bool HasStyleRow(ToolKind tool) => tool is ToolKind.Rect or ToolKind.Arrow or ToolKind.Highlight;
 
     public void Layout(Rectangle selection, Rectangle monitor, float scale, ToolKind tool)
     {
@@ -115,21 +129,22 @@ internal sealed class Toolbar : IDisposable
         Add(Kind.Thinner, Glyph.Minus, "Thinner ( [ )", bs, y2);
         Add(Kind.Thickness, Glyph.Minus, "Line thickness · scroll here or Ctrl+scroll to change", P(30), y2);
         Add(Kind.Thicker, Glyph.Plus, "Thicker ( ] )", bs, y2);
-        if (HasStyleRow(tool))
+        if (tool == ToolKind.Highlight)
+        {
+            Separator(y2);
+            Add(Kind.HighlightMode, Glyph.SnapText, "Snap to text: drag across words to highlight them exactly (G)", bs, y2, index: 1);
+            Add(Kind.HighlightMode, Glyph.Freehand, "Freehand highlighter (G)", bs, y2, index: 0);
+        }
+        else if (HasStyleRow(tool))
         {
             Separator(y2);
             for (int i = 0; i < LineNames.Length; i++) Add(Kind.Line, Glyph.Minus, LineNames[i] + " (L to cycle)", P(42), y2, index: i);
-            Separator(y2);
             if (tool == ToolKind.Arrow)
             {
+                Separator(y2);
                 Add(Kind.Heads, Glyph.HeadEnd, "Arrowhead at the end", bs, y2, index: (int)ArrowHeads.End);
                 Add(Kind.Heads, Glyph.HeadBoth, "Arrowheads at both ends", bs, y2, index: (int)ArrowHeads.Both);
                 Add(Kind.Heads, Glyph.HeadNone, "Plain line, no arrowhead", bs, y2, index: (int)ArrowHeads.None);
-            }
-            else
-            {
-                Add(Kind.Corners, Glyph.Square, "Square corners", bs, y2, index: 0);
-                Add(Kind.Corners, Glyph.Rounded, "Rounded corners", bs, y2, index: 1);
             }
         }
         int row2Used = x - gap;
@@ -167,19 +182,26 @@ internal sealed class Toolbar : IDisposable
     private void LayoutPopup()
     {
         PopupBounds = Rectangle.Empty;
-        if (!ColorPopupOpen) return;
-        var picker = _buttons.First(b => b.Kind == Kind.ColorPicker).Bounds;
-        int sw = P(28), gap = P(6), pad = P(8), cols = 5, rows = (ColorNames.Length + cols - 1) / cols;
+        if (Popup == ToolbarPopup.None) return;
+        bool color = Popup == ToolbarPopup.Color;
+        var anchor = color
+            ? _buttons.First(b => b.Kind == Kind.ColorPicker).Bounds
+            : _buttons.First(b => b.Kind == Kind.Tool && b.Tool == ToolKind.Rect).Bounds;
+        int count = color ? ColorNames.Length : Shapes.Length;
+        int sw = P(color ? 28 : 34), gap = P(color ? 6 : 3), pad = P(color ? 8 : 6), cols = color ? 5 : Shapes.Length;
+        int rows = (count + cols - 1) / cols;
         int w = pad * 2 + cols * sw + (cols - 1) * gap, h = pad * 2 + rows * sw + (rows - 1) * gap;
-        int x = Math.Clamp(picker.X, _monitor.Left + P(4), Math.Max(_monitor.Left, _monitor.Right - w - P(4)));
+        int x = Math.Clamp(anchor.X - pad, _monitor.Left + P(4), Math.Max(_monitor.Left, _monitor.Right - w - P(4)));
         // Open away from the toolbar: above it when there is room, otherwise below.
         int y = Bounds.Top - h - P(6);
         if (y < _monitor.Top + P(4)) y = Bounds.Bottom + P(6);
         PopupBounds = new Rectangle(x, y, w, h);
-        for (int i = 0; i < ColorNames.Length; i++)
+        for (int i = 0; i < count; i++)
         {
             var r = new Rectangle(x + pad + i % cols * (sw + gap), y + pad + i / cols * (sw + gap), sw, sw);
-            _buttons.Add(new Button(Kind.Color, Glyph.Minus, $"{ColorNames[i]} ({(i + 1) % 10})", r, Index: i));
+            _buttons.Add(color
+                ? new Button(Kind.Color, Glyph.Minus, $"{ColorNames[i]} ({(i + 1) % 10})", r, Index: i)
+                : new Button(Kind.Shape, Icons.For(Shapes[i].Shape), Shapes[i].Name, r, Index: i));
         }
     }
 
@@ -200,10 +222,16 @@ internal sealed class Toolbar : IDisposable
         var size = TextRenderer.MeasureText(hover.Tip, Font);
         int w = size.Width + P(14), h = size.Height + P(9);
         int x = Math.Clamp(hover.Bounds.X + hover.Bounds.Width / 2 - w / 2, _monitor.Left + P(2), Math.Max(_monitor.Left, _monitor.Right - w - P(2)));
-        var anchor = hover.Kind == Kind.Color ? PopupBounds : Bounds;
-        int y = anchor.Bottom + P(5);
-        if (y + h > _monitor.Bottom || (hover.Kind != Kind.Color && PopupBounds.IntersectsWith(new Rectangle(x, y, w, h))))
-            y = anchor.Top - h - P(5);
+        if (hover.Kind is Kind.Color or Kind.Shape)
+        {
+            // On the far side of the pop-up, so it never covers the toolbar.
+            bool popupAbove = PopupBounds.Bottom <= Bounds.Top;
+            int py = popupAbove ? PopupBounds.Top - h - P(5) : PopupBounds.Bottom + P(5);
+            return new Rectangle(x, py, w, h);
+        }
+        int y = Bounds.Bottom + P(5);
+        if (y + h > _monitor.Bottom || PopupBounds.IntersectsWith(new Rectangle(x, y, w, h)))
+            y = Bounds.Top - h - P(5);
         return new Rectangle(x, y, w, h);
     }
 
@@ -228,14 +256,14 @@ internal sealed class Toolbar : IDisposable
 
         foreach (var b in _buttons)
         {
-            if (b.Kind == Kind.Color) continue; // drawn with the pop-up
+            if (b.Kind is Kind.Color or Kind.Shape) continue; // drawn with the pop-up
             bool isHover = ReferenceEquals(b, hover);
             bool isActive = b.Kind switch
             {
                 Kind.Tool => b.Tool == state.Tool,
                 Kind.Heads => b.Index == (int)state.Heads,
-                Kind.Corners => (b.Index == 1) == state.Rounded,
                 Kind.Line => b.Index == (int)state.LineStyle,
+                Kind.HighlightMode => (b.Index == 1) == state.HighlightSnap,
                 _ => false,
             };
             bool enabled = b.Kind switch
@@ -280,6 +308,20 @@ internal sealed class Toolbar : IDisposable
                     Icons.Draw(g, Glyph.Chevron, chevron, ink, 13f * _scale);
                     break;
                 }
+                case Kind.Tool when b.Tool == ToolKind.Rect:
+                {
+                    // Shows the current shape, with a small corner mark for the dropdown.
+                    Icons.Draw(g, Icons.For(state.Shape), b.Bounds, color, iconSize);
+                    float m = 7f * _scale;
+                    using var mark = new SolidBrush(Color.FromArgb(200, color));
+                    g.FillPolygon(mark, new[]
+                    {
+                        new PointF(b.Bounds.Right - P(3), b.Bounds.Bottom - P(3) - m),
+                        new PointF(b.Bounds.Right - P(3), b.Bounds.Bottom - P(3)),
+                        new PointF(b.Bounds.Right - P(3) - m, b.Bounds.Bottom - P(3)),
+                    });
+                    break;
+                }
                 default:
                     Icons.Draw(g, b.Glyph, b.Bounds, color, iconSize);
                     break;
@@ -292,6 +334,14 @@ internal sealed class Toolbar : IDisposable
         if (!PopupBounds.IsEmpty)
         {
             PaintPanel(g, PopupBounds);
+            foreach (var b in _buttons.Where(b => b.Kind == Kind.Shape))
+            {
+                bool selected = Shapes[b.Index].Shape == state.Shape;
+                var face = Rectangle.Inflate(b.Bounds, -1, -1);
+                if (selected) Drawing.FillRoundRect(g, active, face, P(6));
+                else if (ReferenceEquals(b, hover)) Drawing.FillRoundRect(g, hovered, face, P(6));
+                Icons.Draw(g, b.Glyph, b.Bounds, ink, iconSize);
+            }
             foreach (var b in _buttons.Where(b => b.Kind == Kind.Color))
             {
                 bool selected = b.Index == state.ColorIndex;

@@ -20,7 +20,7 @@ internal sealed record OverlayResult(OverlayOutcome Outcome, Size Size, string? 
 internal sealed class OverlayForm : Form
 {
     private enum Phase { Idle, Selecting, Editing }
-    private enum DragKind { None, Select, Draw, Resize, TextRange, TextBox }
+    private enum DragKind { None, Select, Draw, Resize, TextRange, TextBox, HighlightText }
     private enum OcrState { Off, Running, Ready }
 
     internal static readonly Color Accent = Color.FromArgb(0, 120, 212);
@@ -51,7 +51,9 @@ internal sealed class OverlayForm : Form
     private float _strokeWidth = 4f;
     private LineStyle _lineStyle = LineStyle.Solid;
     private ArrowHeads _heads = ArrowHeads.End;
-    private bool _rounded;
+    private ShapeKind _shape = ShapeKind.Rectangle;
+    private bool _highlightSnap = true;
+    private int _highlightAnchor = -1;
     private Annotation? _lastShape;
     private Annotation? _preview;
     private List<Point>? _stroke;
@@ -150,7 +152,7 @@ internal sealed class OverlayForm : Form
         Log.Trace($"dim {watch.ElapsedMilliseconds} ms");
         _doc = new AnnotationDocument();
         _tool = _settings.DefaultTool;
-        _toolbar.ColorPopupOpen = false;
+        _toolbar.Popup = ToolbarPopup.None;
         _drag = DragKind.None;
         _preview = null;
         _stroke = null;
@@ -288,15 +290,27 @@ internal sealed class OverlayForm : Form
         _toolbar.Layout(sel, _frame.MonitorAt(anchor).Bounds, _scale, _tool);
     }
 
-    private void SetColorPopup(bool open)
+    private void SetColorPopup(bool open) =>
+        SetPopup(open ? ToolbarPopup.Color : _toolbar.Popup == ToolbarPopup.Color ? ToolbarPopup.None : _toolbar.Popup);
+
+    /// <summary>Opens the colour palette or shape dropdown (one at a time), or closes it with None.</summary>
+    private void SetPopup(ToolbarPopup popup)
     {
-        if (_toolbar.ColorPopupOpen == open) return;
+        if (_toolbar.Popup == popup) return;
         var before = _toolbar.FullBounds;
-        _toolbar.ColorPopupOpen = open;
+        _toolbar.Popup = popup;
         _hoverButton = null;
         LayoutToolbar();
         Invalidate(before);
         RefreshDynamic();
+    }
+
+    /// <summary>Highlights from the anchor word to <paramref name="word"/>, one band per run of words on a line.</summary>
+    private void UpdateTextHighlight(int word)
+    {
+        var bands = Segments(WordRange(_highlightAnchor, word)).Select(r => Rectangle.Inflate(r, Px(2), Px(2))).ToList();
+        _preview?.Dispose();
+        _preview = bands.Count > 0 ? new TextHighlightAnnotation(bands) : null;
     }
 
     private float TextSize => Math.Min(12f + 3.5f * _strokeWidth, 90f);
@@ -321,7 +335,7 @@ internal sealed class OverlayForm : Form
         bool matches = (_tool == ToolKind.Rect && _lastShape is RectAnnotation) || (_tool == ToolKind.Arrow && _lastShape is ArrowAnnotation);
         if (matches && _doc is not null && _doc.Items.Count > 0 && ReferenceEquals(_doc.Items[^1], _lastShape))
         {
-            var replacement = ((IRestylable)_lastShape!).Restyle(CurrentStroke(), _heads, _rounded);
+            var replacement = ((IRestylable)_lastShape!).Restyle(CurrentStroke(), _heads, _shape);
             Invalidate(Rectangle.Inflate(_lastShape!.Bounds, Px(4), Px(4)));
             _doc.Replace(_lastShape, replacement);
             _lastShape = replacement;
@@ -449,7 +463,7 @@ internal sealed class OverlayForm : Form
 
         if (_phase == Phase.Editing && _doc is not null)
         {
-            var state = new ToolbarState(_tool, _colorIndex, _strokeWidth, _lineStyle, _heads, _rounded,
+            var state = new ToolbarState(_tool, _colorIndex, _strokeWidth, _lineStyle, _heads, _shape, _highlightSnap,
                 _doc.CanUndo, _doc.CanRedo, OcrStatusText(), HasText);
             _toolbar.Paint(g, state, Palette, _hoverButton);
             if (_toast is not null)
@@ -671,7 +685,7 @@ internal sealed class OverlayForm : Form
         }
 
         // A click anywhere else just closes the colour pop-up.
-        if (_toolbar.ColorPopupOpen)
+        if (_toolbar.Popup != ToolbarPopup.None)
         {
             SetColorPopup(false);
             return;
@@ -738,6 +752,16 @@ internal sealed class OverlayForm : Form
             return;
         }
 
+        // Highlighter in snap mode: starting on a word highlights whole words; elsewhere it stays freehand.
+        if (_tool == ToolKind.Highlight && _highlightSnap && WordAt(e.Location) is { } startWord)
+        {
+            _drag = DragKind.HighlightText;
+            _highlightAnchor = startWord;
+            UpdateTextHighlight(startWord);
+            RefreshDynamic();
+            return;
+        }
+
         _drag = DragKind.Draw;
         _dragStart = e.Location;
         _dragRect = new Rectangle(e.Location, Size.Empty);
@@ -769,6 +793,10 @@ internal sealed class OverlayForm : Form
         else if (_drag == DragKind.TextRange)
         {
             if (NearestWord(e.Location) is { } word) SetTextSelection(WordRange(_anchorWord, word));
+        }
+        else if (_drag == DragKind.HighlightText)
+        {
+            if (NearestWord(e.Location) is { } word) UpdateTextHighlight(word);
         }
         else if (_drag == DragKind.TextBox)
         {
@@ -846,6 +874,17 @@ internal sealed class OverlayForm : Form
         {
             _drag = DragKind.None;
         }
+        else if (_drag == DragKind.HighlightText)
+        {
+            _drag = DragKind.None;
+            if (_preview is { } highlight)
+            {
+                _preview = null;
+                _doc!.Add(highlight);
+                _lastShape = null;
+                Invalidate(Rectangle.Inflate(highlight.Bounds, Px(4), Px(4)));
+            }
+        }
         RefreshDynamic();
     }
 
@@ -861,7 +900,8 @@ internal sealed class OverlayForm : Form
         int handle = HandleAt(sel, p);
         if (handle >= 0) SetCursor(HandleCursor(handle));
         else if (!sel.Contains(p)) SetCursor(_doc.IsEmpty ? Cursors.Cross : Cursors.Default);
-        else if (_tool == ToolKind.Text || (_tool == ToolKind.SelectText && WordAt(p) is not null)) SetCursor(Cursors.IBeam);
+        else if (_tool == ToolKind.Text || ((_tool == ToolKind.SelectText || (_tool == ToolKind.Highlight && _highlightSnap)) && WordAt(p) is not null))
+            SetCursor(Cursors.IBeam);
         else SetCursor(Cursors.Cross);
     }
 
@@ -894,7 +934,7 @@ internal sealed class OverlayForm : Form
             ToolKind.Blur => Redaction(RedactionKind.Blur, _settings.BlurStrength),
             ToolKind.Pixelate => Redaction(RedactionKind.Pixelate, _settings.PixelateBlockSize),
             ToolKind.Redact => Redaction(RedactionKind.Box, 0),
-            ToolKind.Rect => new RectAnnotation(_dragRect, CurrentStroke(), _rounded),
+            ToolKind.Rect => new RectAnnotation(_dragRect, CurrentStroke(), _shape),
             ToolKind.Arrow => new ArrowAnnotation(_dragStart, constrain ? Snap45(_dragStart, p) : p, CurrentStroke(), _heads),
             ToolKind.Pen or ToolKind.Highlight => Stroke(p, constrain, color, width),
             _ => null,
@@ -1015,7 +1055,10 @@ internal sealed class OverlayForm : Form
     {
         switch (button.Kind)
         {
-            case Toolbar.Kind.Tool: SetTool(button.Tool); break;
+            case Toolbar.Kind.Tool when button.Tool == ToolKind.Rect && _tool == ToolKind.Rect:
+                SetPopup(_toolbar.Popup == ToolbarPopup.Shape ? ToolbarPopup.None : ToolbarPopup.Shape);
+                break;
+            case Toolbar.Kind.Tool: SetPopup(ToolbarPopup.None); SetTool(button.Tool); break;
             case Toolbar.Kind.Undo: Undo(); break;
             case Toolbar.Kind.Redo: Redo(); break;
             case Toolbar.Kind.Copy: Export(save: false); break;
@@ -1027,7 +1070,12 @@ internal sealed class OverlayForm : Form
             case Toolbar.Kind.Thicker: ChangeThickness(1); break;
             case Toolbar.Kind.Line: _lineStyle = (LineStyle)button.Index; ApplyStyle(); break;
             case Toolbar.Kind.Heads: _heads = (ArrowHeads)button.Index; ApplyStyle(); break;
-            case Toolbar.Kind.Corners: _rounded = button.Index == 1; ApplyStyle(); break;
+            case Toolbar.Kind.Shape:
+                _shape = Toolbar.Shapes[button.Index].Shape;
+                SetPopup(ToolbarPopup.None);
+                ApplyStyle();
+                break;
+            case Toolbar.Kind.HighlightMode: _highlightSnap = button.Index == 1; RefreshDynamic(); break;
             case Toolbar.Kind.Close: Finish(OverlayOutcome.Cancelled); break;
         }
     }
@@ -1068,7 +1116,7 @@ internal sealed class OverlayForm : Form
         switch (e.KeyCode)
         {
             case Keys.Escape:
-                if (editing && _toolbar.ColorPopupOpen) SetColorPopup(false);
+                if (editing && _toolbar.Popup != ToolbarPopup.None) SetPopup(ToolbarPopup.None);
                 else if (editing && _textSelection.Count > 0) SetTextSelection(Array.Empty<int>());
                 else Finish(OverlayOutcome.Cancelled);
                 break;
@@ -1105,6 +1153,15 @@ internal sealed class OverlayForm : Form
                 break;
             case Keys.OemCloseBrackets or Keys.Oemplus or Keys.Add when editing && !e.Control:
                 ChangeThickness(e.Shift ? 5 : 1);
+                break;
+            case Keys.U when editing && !e.Control && !e.Alt && _tool == ToolKind.Rect:
+                // U again cycles the shape: rectangle, rounded, ellipse, triangle, diamond, star.
+                _shape = (ShapeKind)(((int)_shape + 1) % Toolbar.Shapes.Length);
+                ApplyStyle();
+                break;
+            case Keys.G when editing && !e.Control && _tool == ToolKind.Highlight:
+                _highlightSnap = !_highlightSnap;
+                ShowToast(_highlightSnap ? "Highlighter snaps to text" : "Freehand highlighter");
                 break;
             case Keys.L when editing && !e.Control:
                 _lineStyle = (LineStyle)(((int)_lineStyle + 1) % 4);
