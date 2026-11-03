@@ -112,19 +112,28 @@ internal sealed class DxgiCapture : IDisposable
         if (output.Duplication is null) Restart(output);
         if (output.Duplication is null) return false;
 
-        var result = output.Duplication.AcquireNextFrame(timeoutMs, out _, out var resource);
+        var result = output.Duplication.AcquireNextFrame(timeoutMs, out var info, out var resource);
         if (result.Code == Vortice.DXGI.ResultCode.WaitTimeout.Code) return output.Primed; // unchanged since the last acquire
         if (result.Failure)
         {
             // Access lost: mode change, secure desktop, exclusive full-screen app. Retry once.
+            Log.Trace($"DXGI acquire failed ({result.Code:X8}); restarting duplication");
             Restart(output);
             if (output.Duplication is null) return false;
-            result = output.Duplication.AcquireNextFrame(timeoutMs, out _, out resource);
+            result = output.Duplication.AcquireNextFrame(timeoutMs, out info, out resource);
             if (result.Failure) return false;
         }
 
         try
         {
+            // LastPresentTime 0 = only the mouse pointer changed. The surface then holds no new desktop image
+            // and can be blank, so keep the last real frame instead of copying it.
+            if (info.LastPresentTime == 0)
+            {
+                Log.Trace($"DXGI pointer-only frame ignored (primed {output.Primed})");
+                return output.Primed;
+            }
+
             using var texture = resource.QueryInterface<ID3D11Texture2D>();
             var desc = texture.Description;
             if (desc.Format != Format.B8G8R8A8_UNorm) return false;
@@ -184,6 +193,16 @@ internal sealed class DxgiCapture : IDisposable
                         byte* d = (byte*)dst + (dy + y) * dstPitch + dx * 4L;
                         Buffer.MemoryCopy(s, d, bytes, bytes);
                     });
+
+                    // Safety net: a monitor that comes back completely black is almost certainly a bad frame
+                    // (display waking, driver hiccup), not the real screen. Let the caller use GDI instead,
+                    // and make the next capture take a fresh frame.
+                    if (IsBlank((byte*)dst, dstPitch, dx, dy, width, height))
+                    {
+                        Log.Trace($"DXGI frame for monitor at {output.Bounds.Location} was blank; using GDI");
+                        output.Primed = false;
+                        return false;
+                    }
                 }
                 finally
                 {
@@ -194,6 +213,23 @@ internal sealed class DxgiCapture : IDisposable
         finally
         {
             target.UnlockBits(data);
+        }
+        return true;
+    }
+
+    /// <summary>True when a 24×24 grid of samples across the area is pure black.</summary>
+    internal static unsafe bool IsBlank(byte* pixels, long stride, int x, int y, int width, int height)
+    {
+        if (width <= 0 || height <= 0) return true;
+        const int grid = 24;
+        for (int j = 0; j < grid; j++)
+        {
+            byte* row = pixels + (y + (long)(height - 1) * j / (grid - 1)) * stride;
+            for (int i = 0; i < grid; i++)
+            {
+                uint p = *(uint*)(row + (x + (long)(width - 1) * i / (grid - 1)) * 4);
+                if ((p & 0x00FFFFFF) != 0) return false;
+            }
         }
         return true;
     }

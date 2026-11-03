@@ -91,6 +91,26 @@ public class EffectsTests
     }
 }
 
+public class CaptureTests
+{
+    [Fact]
+    public unsafe void Blank_frame_check_spots_all_black_but_not_a_real_screen()
+    {
+        int w = 200, h = 100;
+        var pixels = new byte[w * h * 4];
+        fixed (byte* p = pixels)
+        {
+            Assert.True(Capture.DxgiCapture.IsBlank(p, w * 4, 0, 0, w, h));
+            // A dark-grey title bar is enough to count as a real image.
+            for (int y = 10; y < 16; y++)
+                for (int x = 0; x < w; x++) pixels[(y * w + x) * 4] = 30;
+            Assert.False(Capture.DxgiCapture.IsBlank(p, w * 4, 0, 0, w, h));
+            // The check only looks inside the given area.
+            Assert.True(Capture.DxgiCapture.IsBlank(p, w * 4, 0, 50, w, 50));
+        }
+    }
+}
+
 public class ToolbarTests
 {
     [Fact]
