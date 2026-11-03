@@ -99,13 +99,61 @@ public class ToolbarTests
         using var toolbar = new Toolbar();
         var monitor = new Rectangle(0, 0, 1920, 1080);
 
-        toolbar.Layout(new Rectangle(1800, 1000, 100, 70), monitor, 1.5f);
+        toolbar.Layout(new Rectangle(1800, 1000, 100, 70), monitor, 1.5f, ToolKind.Arrow);
         Assert.True(monitor.Contains(toolbar.Bounds));
+        Assert.Equal(4, toolbar.Buttons.Count(b => b.Kind == Toolbar.Kind.Line));
+        Assert.Equal(3, toolbar.Buttons.Count(b => b.Kind == Toolbar.Kind.Heads));
 
-        toolbar.Layout(new Rectangle(0, 0, 1920, 1080), monitor, 1f);
+        toolbar.Layout(new Rectangle(0, 0, 1920, 1080), monitor, 1f, ToolKind.Pixelate);
         Assert.True(monitor.Contains(toolbar.Bounds));
+        Assert.DoesNotContain(toolbar.Buttons, b => b.Kind is Toolbar.Kind.Line or Toolbar.Kind.Heads or Toolbar.Kind.Corners);
         Assert.Equal(14, toolbar.Buttons.Count(b => b.Kind is Toolbar.Kind.Tool or Toolbar.Kind.Undo or Toolbar.Kind.Copy or Toolbar.Kind.Save or Toolbar.Kind.CopyText));
         Assert.Null(toolbar.HitTest(toolbar.Buttons.Single(b => b.Kind == Toolbar.Kind.Status).Bounds.Location + new Size(2, 2)));
+    }
+}
+
+public class ShapeStyleTests
+{
+    [Fact]
+    public void Restyling_the_same_shape_repeatedly_is_one_undo_step()
+    {
+        using var doc = new AnnotationDocument();
+        doc.Reset(new Rectangle(0, 0, 200, 200));
+        var drawn = new RectAnnotation(new Rectangle(10, 10, 50, 50), new Stroke(Color.Red, 2, LineStyle.Solid));
+        doc.Add(drawn);
+
+        Annotation current = drawn;
+        for (int w = 3; w <= 6; w++)
+        {
+            var next = ((IRestylable)current).Restyle(new Stroke(Color.Red, w, LineStyle.Dashed), ArrowHeads.End, rounded: true);
+            doc.Replace(current, next);
+            current = next;
+        }
+        var final = Assert.IsType<RectAnnotation>(Assert.Single(doc.Items));
+        Assert.Equal(6, final.Stroke.Width);
+        Assert.Equal(LineStyle.Dashed, final.Stroke.Style);
+        Assert.True(final.Rounded);
+
+        Assert.True(doc.Undo());
+        Assert.Same(drawn, Assert.Single(doc.Items));
+        Assert.True(doc.Redo());
+        Assert.Same(final, Assert.Single(doc.Items));
+    }
+
+    [Fact]
+    public void Dashed_line_leaves_gaps_and_both_heads_are_drawn()
+    {
+        using var bmp = new Bitmap(220, 60);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.White);
+            new ArrowAnnotation(new Point(10, 30), new Point(210, 30), new Stroke(Color.Black, 4, LineStyle.Dashed), ArrowHeads.Both).Render(g);
+        }
+        int dark = 0;
+        for (int x = 40; x < 180; x++) if (bmp.GetPixel(x, 30).R < 128) dark++;
+        Assert.InRange(dark, 40, 120);              // dashes, not a solid run of 140
+        Assert.True(bmp.GetPixel(14, 30).R < 128);   // tip at the start
+        Assert.True(bmp.GetPixel(206, 30).R < 128);  // tip at the end
     }
 }
 

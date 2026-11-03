@@ -70,22 +70,66 @@ internal sealed class RedactionAnnotation : Annotation
     public override void Dispose() => _effect?.Dispose();
 }
 
-internal sealed class RectAnnotation(Rectangle rect, Color color, float width) : Annotation
-{
-    public override Rectangle Bounds => Rectangle.Inflate(rect, (int)width + 1, (int)width + 1);
+public enum LineStyle { Solid, Dashed, Dotted, DashDot }
 
-    public override void Render(Graphics g)
+public enum ArrowHeads { End, Both, None }
+
+/// <summary>Colour, thickness and dash pattern shared by the outline shapes.</summary>
+internal readonly record struct Stroke(Color Color, float Width, LineStyle Style)
+{
+    public Pen CreatePen()
     {
-        using var pen = new Pen(color, width) { LineJoin = LineJoin.Round };
-        g.DrawRectangle(pen, rect);
+        var pen = new Pen(Color, Width) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round, DashCap = DashCap.Round };
+        // Patterns are in multiples of the pen width; a near-zero dash with round caps draws a dot.
+        switch (Style)
+        {
+            case LineStyle.Dashed: pen.DashPattern = new[] { 3f, 2f }; break;
+            case LineStyle.Dotted: pen.DashPattern = new[] { 0.01f, 2f }; break;
+            case LineStyle.DashDot: pen.DashPattern = new[] { 3f, 2f, 0.01f, 2f }; break;
+        }
+        return pen;
     }
 }
 
-internal sealed class ArrowAnnotation(Point from, Point to, Color color, float width) : Annotation
+/// <summary>An annotation whose colour, thickness and line style can be changed after it is drawn.</summary>
+internal interface IRestylable
 {
-    private float HeadLength => Math.Max(width * 4.5f, 14f);
+    Annotation Restyle(Stroke stroke, ArrowHeads heads, bool rounded);
+}
 
-    public override Rectangle Bounds => BoundsOf(new[] { from, to }, HeadLength + width);
+internal sealed class RectAnnotation(Rectangle rect, Stroke stroke, bool rounded = false) : Annotation, IRestylable
+{
+    public RectAnnotation(Rectangle rect, Color color, float width) : this(rect, new Stroke(color, width, LineStyle.Solid)) { }
+
+    public Stroke Stroke => stroke;
+    public bool Rounded => rounded;
+    public override Rectangle Bounds => Rectangle.Inflate(rect, (int)stroke.Width + 1, (int)stroke.Width + 1);
+
+    public override void Render(Graphics g)
+    {
+        using var pen = stroke.CreatePen();
+        if (!rounded)
+        {
+            g.DrawRectangle(pen, rect);
+            return;
+        }
+        float radius = Math.Min(Math.Max(stroke.Width * 3f, 10f), Math.Min(rect.Width, rect.Height) / 2f);
+        using var path = Overlay.Drawing.RoundRect(rect, radius);
+        g.DrawPath(pen, path);
+    }
+
+    public Annotation Restyle(Stroke newStroke, ArrowHeads heads, bool newRounded) => new RectAnnotation(rect, newStroke, newRounded);
+}
+
+internal sealed class ArrowAnnotation(Point from, Point to, Stroke stroke, ArrowHeads heads = ArrowHeads.End) : Annotation, IRestylable
+{
+    public ArrowAnnotation(Point from, Point to, Color color, float width) : this(from, to, new Stroke(color, width, LineStyle.Solid)) { }
+
+    public Stroke Stroke => stroke;
+    public ArrowHeads Heads => heads;
+    private float HeadLength => Math.Max(stroke.Width * 4.5f, 14f);
+
+    public override Rectangle Bounds => BoundsOf(new[] { from, to }, HeadLength + stroke.Width);
 
     public override void Render(Graphics g)
     {
@@ -93,20 +137,37 @@ internal sealed class ArrowAnnotation(Point from, Point to, Color color, float w
         float length = MathF.Sqrt(dx * dx + dy * dy);
         if (length < 1) return;
         float ux = dx / length, uy = dy / length;
-        float head = Math.Min(HeadLength, length);
-        float half = head * 0.45f;
-        var basePoint = new PointF(to.X - ux * head, to.Y - uy * head);
-        var shaftEnd = new PointF(to.X - ux * head * 0.8f, to.Y - uy * head * 0.8f);
-        using (var pen = new Pen(color, width) { StartCap = LineCap.Round, EndCap = LineCap.Flat })
-            g.DrawLine(pen, from, shaftEnd);
-        using var brush = new SolidBrush(color);
-        g.FillPolygon(brush, new[]
+        int headCount = heads switch { ArrowHeads.Both => 2, ArrowHeads.End => 1, _ => 0 };
+        float head = headCount == 0 ? 0 : Math.Min(HeadLength, length / headCount);
+
+        // The shaft stops inside each head so a dashed line never shows a gap under the tip.
+        var start = heads == ArrowHeads.Both ? new PointF(from.X + ux * head * 0.8f, from.Y + uy * head * 0.8f) : new PointF(from.X, from.Y);
+        var end = headCount > 0 ? new PointF(to.X - ux * head * 0.8f, to.Y - uy * head * 0.8f) : new PointF(to.X, to.Y);
+        using (var pen = stroke.CreatePen())
         {
-            new PointF(to.X, to.Y),
+            if (headCount > 0) pen.EndCap = LineCap.Flat;
+            if (heads == ArrowHeads.Both) pen.StartCap = LineCap.Flat;
+            g.DrawLine(pen, start, end);
+        }
+
+        using var brush = new SolidBrush(stroke.Color);
+        if (headCount > 0) g.FillPolygon(brush, Head(to, ux, uy, head));
+        if (heads == ArrowHeads.Both) g.FillPolygon(brush, Head(from, -ux, -uy, head));
+    }
+
+    private static PointF[] Head(Point tip, float ux, float uy, float head)
+    {
+        float half = head * 0.45f;
+        var basePoint = new PointF(tip.X - ux * head, tip.Y - uy * head);
+        return new[]
+        {
+            new PointF(tip.X, tip.Y),
             new PointF(basePoint.X - uy * half, basePoint.Y + ux * half),
             new PointF(basePoint.X + uy * half, basePoint.Y - ux * half),
-        });
+        };
     }
+
+    public Annotation Restyle(Stroke newStroke, ArrowHeads newHeads, bool rounded) => new ArrowAnnotation(from, to, newStroke, newHeads);
 }
 
 /// <summary>Freehand pen or highlighter stroke.</summary>

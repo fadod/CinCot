@@ -29,8 +29,7 @@ internal sealed class OverlayForm : Form
         Color.FromArgb(232, 17, 35), Color.FromArgb(255, 185, 0), Color.FromArgb(16, 160, 16),
         Color.FromArgb(0, 120, 212), Color.Black, Color.White,
     };
-    private static readonly float[] StrokeWidths = { 2f, 4f, 8f };
-    private static readonly float[] TextSizes = { 18f, 26f, 40f };
+    internal const float MinStroke = 1f, MaxStroke = 30f;
     private const string Hint = "Drag to select  ·  Click a window  ·  Hold B / X / R while dragging to start redacting  ·  Esc to cancel";
 
     private readonly AppSettings _settings;
@@ -46,7 +45,13 @@ internal sealed class OverlayForm : Form
     private int _resizeHandle = -1;
     private Rectangle _resizeOrigin;
     private ToolKind _tool;
-    private int _colorIndex, _widthIndex = 1;
+    // Drawing style; kept between captures because the overlay window is reused.
+    private int _colorIndex;
+    private float _strokeWidth = 4f;
+    private LineStyle _lineStyle = LineStyle.Solid;
+    private ArrowHeads _heads = ArrowHeads.End;
+    private bool _rounded;
+    private Annotation? _lastShape;
     private Annotation? _preview;
     private List<Point>? _stroke;
     private Point? _textAt;
@@ -137,6 +142,7 @@ internal sealed class OverlayForm : Form
         _ocrState = OcrState.Off;
         _textSelection.Clear();
         _anchorWord = -1;
+        _lastShape = null;
         _frame = frame;
         _dimmed = new DibBitmap(frame.Image.Width, frame.Image.Height);
         Effects.Dim(frame.Image, _dimmed.Bitmap, 1f - _settings.DimPercent / 100f);
@@ -277,7 +283,38 @@ internal sealed class OverlayForm : Form
         var sel = _doc.Selection;
         var anchor = new Point(sel.X + sel.Width / 2, Math.Max(sel.Top, sel.Bottom - 1));
         UpdateScale(anchor);
-        _toolbar.Layout(sel, _frame.MonitorAt(anchor).Bounds, _scale);
+        _toolbar.Layout(sel, _frame.MonitorAt(anchor).Bounds, _scale, _tool);
+    }
+
+    private float TextSize => Math.Min(12f + 3.5f * _strokeWidth, 90f);
+
+    private Stroke CurrentStroke() => new(Palette[_colorIndex], _strokeWidth * _scale, _lineStyle);
+
+    private void ChangeThickness(float delta)
+    {
+        float width = Math.Clamp(_strokeWidth + delta, MinStroke, MaxStroke);
+        if (width == _strokeWidth) return;
+        _strokeWidth = width;
+        ApplyStyle();
+    }
+
+    /// <summary>
+    /// Applies the current colour/thickness/line style to the text being typed and, while the Rect or Arrow
+    /// tool is active, to the shape just drawn with it, so it can be tuned after drawing.
+    /// </summary>
+    private void ApplyStyle()
+    {
+        UpdateTextPreview();
+        bool matches = (_tool == ToolKind.Rect && _lastShape is RectAnnotation) || (_tool == ToolKind.Arrow && _lastShape is ArrowAnnotation);
+        if (matches && _doc is not null && _doc.Items.Count > 0 && ReferenceEquals(_doc.Items[^1], _lastShape))
+        {
+            var replacement = ((IRestylable)_lastShape!).Restyle(CurrentStroke(), _heads, _rounded);
+            Invalidate(Rectangle.Inflate(_lastShape!.Bounds, Px(4), Px(4)));
+            _doc.Replace(_lastShape, replacement);
+            _lastShape = replacement;
+            Invalidate(Rectangle.Inflate(replacement.Bounds, Px(4), Px(4)));
+        }
+        RefreshDynamic();
     }
 
     private void SetTool(ToolKind tool)
@@ -286,7 +323,9 @@ internal sealed class OverlayForm : Form
         // The Select tool outlines every recognised word, so switching to or from it repaints the selection.
         if ((tool == ToolKind.SelectText) != (_tool == ToolKind.SelectText) && _doc is not null)
             Invalidate(Rectangle.Inflate(_doc.Selection, Px(4), Px(4)));
+        bool relayout = Toolbar.HasStyleRow(tool) != Toolbar.HasStyleRow(_tool) || tool is ToolKind.Rect or ToolKind.Arrow;
         _tool = tool;
+        if (relayout) LayoutToolbar();
         RefreshDynamic();
     }
 
@@ -397,7 +436,9 @@ internal sealed class OverlayForm : Form
 
         if (_phase == Phase.Editing && _doc is not null)
         {
-            _toolbar.Paint(g, _tool, _colorIndex, _widthIndex, Palette, _hoverButton, _doc.CanUndo, _doc.CanRedo, OcrStatusText(), HasText);
+            var state = new ToolbarState(_tool, _colorIndex, _strokeWidth, _lineStyle, _heads, _rounded,
+                _doc.CanUndo, _doc.CanRedo, OcrStatusText(), HasText);
+            _toolbar.Paint(g, state, Palette, _hoverButton);
             if (_toast is not null)
             {
                 using var bg = new SolidBrush(Color.FromArgb(235, 20, 20, 22));
@@ -416,7 +457,7 @@ internal sealed class OverlayForm : Form
 
     private void DrawCaret(Graphics g, Rectangle textBounds)
     {
-        float size = TextSizes[_widthIndex] * _scale;
+        float size = TextSize * _scale;
         int x = _text.Length == 0 ? _textAt!.Value.X : textBounds.Right - Px(2);
         using var pen = new Pen(Palette[_colorIndex], Math.Max(1.5f, _scale * 1.5f));
         g.DrawLine(pen, x, _textAt!.Value.Y + size * 0.15f, x, _textAt.Value.Y + size * 1.25f);
@@ -717,6 +758,15 @@ internal sealed class OverlayForm : Form
         RefreshDynamic();
     }
 
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        // Scroll over the toolbar, or Ctrl+scroll anywhere, to change line thickness.
+        if (_phase != Phase.Editing || _drag != DragKind.None) return;
+        if (!_toolbar.Bounds.Contains(e.Location) && !ModifierKeys.HasFlag(Keys.Control)) return;
+        ChangeThickness(Math.Sign(e.Delta));
+    }
+
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
@@ -812,7 +862,7 @@ internal sealed class OverlayForm : Form
         }
         _dragRect = Drawing.Normalize(_dragStart, p);
         var color = Palette[_colorIndex];
-        float width = StrokeWidths[_widthIndex] * _scale;
+        float width = _strokeWidth * _scale;
 
         _preview?.Dispose();
         _preview = _tool switch
@@ -820,8 +870,8 @@ internal sealed class OverlayForm : Form
             ToolKind.Blur => Redaction(RedactionKind.Blur, _settings.BlurStrength),
             ToolKind.Pixelate => Redaction(RedactionKind.Pixelate, _settings.PixelateBlockSize),
             ToolKind.Redact => Redaction(RedactionKind.Box, 0),
-            ToolKind.Rect => new RectAnnotation(_dragRect, color, width),
-            ToolKind.Arrow => new ArrowAnnotation(_dragStart, constrain ? Snap45(_dragStart, p) : p, color, width),
+            ToolKind.Rect => new RectAnnotation(_dragRect, CurrentStroke(), _rounded),
+            ToolKind.Arrow => new ArrowAnnotation(_dragStart, constrain ? Snap45(_dragStart, p) : p, CurrentStroke(), _heads),
             ToolKind.Pen or ToolKind.Highlight => Stroke(p, constrain, color, width),
             _ => null,
         };
@@ -895,10 +945,11 @@ internal sealed class OverlayForm : Form
         if (preview is StrokeAnnotation)
         {
             preview.Dispose();
-            preview = new StrokeAnnotation(_stroke!.ToList(), Palette[_colorIndex], StrokeWidths[_widthIndex] * _scale, _tool == ToolKind.Highlight);
+            preview = new StrokeAnnotation(_stroke!.ToList(), Palette[_colorIndex], _strokeWidth * _scale, _tool == ToolKind.Highlight);
         }
         _stroke = null;
         doc.Add(preview);
+        _lastShape = preview is IRestylable ? preview : null;
         Invalidate(Rectangle.Inflate(preview.Bounds, Px(4), Px(4)));
     }
 
@@ -906,7 +957,7 @@ internal sealed class OverlayForm : Form
     {
         if (_textAt is not { } at) return;
         _preview?.Dispose();
-        _preview = new TextAnnotation(at, _text.ToString(), Palette[_colorIndex], TextSizes[_widthIndex] * _scale);
+        _preview = new TextAnnotation(at, _text.ToString(), Palette[_colorIndex], TextSize * _scale);
         RefreshDynamic();
     }
 
@@ -946,8 +997,12 @@ internal sealed class OverlayForm : Form
             case Toolbar.Kind.Copy: Export(save: false); break;
             case Toolbar.Kind.CopyText: CopyText(); break;
             case Toolbar.Kind.Save: Export(save: true); break;
-            case Toolbar.Kind.Color: _colorIndex = button.Index; UpdateTextPreview(); RefreshDynamic(); break;
-            case Toolbar.Kind.Width: _widthIndex = button.Index; UpdateTextPreview(); RefreshDynamic(); break;
+            case Toolbar.Kind.Color: _colorIndex = button.Index; ApplyStyle(); break;
+            case Toolbar.Kind.Thinner: ChangeThickness(-1); break;
+            case Toolbar.Kind.Thicker: ChangeThickness(1); break;
+            case Toolbar.Kind.Line: _lineStyle = (LineStyle)button.Index; ApplyStyle(); break;
+            case Toolbar.Kind.Heads: _heads = (ArrowHeads)button.Index; ApplyStyle(); break;
+            case Toolbar.Kind.Corners: _rounded = button.Index == 1; ApplyStyle(); break;
             case Toolbar.Kind.Close: Finish(OverlayOutcome.Cancelled); break;
         }
     }
@@ -1019,17 +1074,19 @@ internal sealed class OverlayForm : Form
             case Keys.Left or Keys.Right or Keys.Up or Keys.Down when editing && !e.Control:
                 Nudge(e.KeyCode, e.Shift ? 10 : 1);
                 break;
-            case Keys.OemOpenBrackets when editing:
-                _widthIndex = Math.Max(0, _widthIndex - 1);
-                RefreshDynamic();
+            case Keys.OemOpenBrackets or Keys.OemMinus or Keys.Subtract when editing && !e.Control:
+                ChangeThickness(e.Shift ? -5 : -1);
                 break;
-            case Keys.OemCloseBrackets when editing:
-                _widthIndex = Math.Min(StrokeWidths.Length - 1, _widthIndex + 1);
-                RefreshDynamic();
+            case Keys.OemCloseBrackets or Keys.Oemplus or Keys.Add when editing && !e.Control:
+                ChangeThickness(e.Shift ? 5 : 1);
+                break;
+            case Keys.L when editing && !e.Control:
+                _lineStyle = (LineStyle)(((int)_lineStyle + 1) % 4);
+                ApplyStyle();
                 break;
             case >= Keys.D1 and <= Keys.D6 when editing && !e.Control:
                 _colorIndex = e.KeyCode - Keys.D1;
-                RefreshDynamic();
+                ApplyStyle();
                 break;
             default:
                 if (editing && !e.Control && !e.Alt && ToolForKey(e.KeyCode) is { } tool) SetTool(tool);

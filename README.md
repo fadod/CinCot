@@ -25,12 +25,22 @@ This is the Phase 1 MVP of the SwiftShot/CInCot design spec.
 | Delete (with text selected) | Black-box redact the selected text |
 | Right-click | Copy text, Select all, Redact / Blur / Pixelate selected text, Copy or Save image |
 | Double-click a word (Select tool) | Select the whole line |
-| 1-6, [ ] | Colour, stroke width |
+| 1-6 | Colour |
+| [ ] or - + (Shift = 5 px), scroll over toolbar, Ctrl + scroll | Line thickness, 1-30 px |
+| L | Cycle line style: solid, dashed, dotted, dash-dot (Rect and Arrow) |
 | Arrow keys (Shift = 10 px) | Nudge the selection |
 | Shift while drawing | Square shapes, 45° arrows, straight strokes |
 
 Running `CInCot.exe` a second time while it is in the tray starts a region capture, so you can
 bind it to any launcher or mouse button too.
+
+## Rectangle and arrow styles
+
+When the Rect or Arrow tool is active, an extra toolbar row appears. It offers four line styles
+(solid, dashed, dotted, dash-dot), square or rounded corners for rectangles, and an arrowhead at the
+end, at both ends or none for arrows. Thickness is the − / value / + control in the bottom row.
+Changing colour, thickness or style right after drawing a rectangle or arrow restyles that shape.
+One Ctrl+Z puts it back as drawn. Your last choices are kept for the next capture.
 
 ## Text recognition
 
