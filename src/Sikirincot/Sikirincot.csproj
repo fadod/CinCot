@@ -11,8 +11,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>Sikirincot</AssemblyName>
     <RootNamespace>Sikirincot</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Product>Sikirincot</Product>
+    <ApplicationIcon>..\..\assets\Sikirincot.ico</ApplicationIcon>
     <Description>Instant screenshot and redaction tool for Windows</Description>
     <!-- Physical-pixel coordinates everywhere; the overlay spans monitors with mixed scaling. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>

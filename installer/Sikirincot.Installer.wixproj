@@ -1,0 +1,20 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <!--
+    Builds Sikirincot-<version>-x64.msi from a self-contained publish of the app.
+    Use build\build-msi.ps1, which publishes the app first and passes PublishDir.
+  -->
+  <PropertyGroup>
+    <OutputName>Sikirincot</OutputName>
+    <Platform>x64</Platform>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish-msi\</PublishDir>
+    <DefineConstants>PublishDir=$(PublishDir);AssetsDir=$(MSBuildThisFileDirectory)..\assets\</DefineConstants>
+    <SuppressValidation>false</SuppressValidation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>

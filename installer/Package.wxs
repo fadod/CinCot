@@ -1,0 +1,66 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!--
+    Per-machine install to Program Files\Sikirincot with a Start menu shortcut. The version comes from
+    the exe, so every release with a higher app version upgrades the previous one in place.
+    UpgradeCode must never change.
+  -->
+  <Package Name="Sikirincot"
+           Manufacturer="fadod"
+           Version="!(bind.FileVersion.SikirincotExe)"
+           UpgradeCode="163A71DB-734C-4F12-BE48-E991313CD8B5"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="Sikirincot - instant screenshots with redaction" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Sikirincot is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="Sikirincot.ico" SourceFile="$(var.AssetsDir)Sikirincot.ico" />
+    <Property Id="ARPPRODUCTICON" Value="Sikirincot.ico" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPCOMMENTS" Value="Instant screenshots with on-screen redaction and text recognition." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Sikirincot" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="SikirincotExeComponent">
+        <File Id="SikirincotExe" Source="$(var.PublishDir)Sikirincot.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- An upgrade or uninstall closes a running Sikirincot instead of asking for a reboot. -->
+    <util:CloseApplication Id="CloseSikirincot" Target="Sikirincot.exe" CloseMessage="yes" TerminateProcess="0" RebootPrompt="no" />
+
+    <!-- Start menu shortcut; it takes its icon from the exe. The HKCU value is only its install marker. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="B3F4AE60-0593-4F1E-B59C-E4EFFC051FE1">
+        <Shortcut Id="SikirincotShortcut"
+                  Name="Sikirincot"
+                  Description="Instant screenshots with redaction (PrtSc)"
+                  Target="[INSTALLFOLDER]Sikirincot.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Sikirincot" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- Start Sikirincot when an interactive install finishes (not on silent or managed installs). -->
+    <CustomAction Id="LaunchSikirincot"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]Sikirincot.exe&quot;"
+                  Return="asyncNoWait"
+                  Impersonate="yes" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchSikirincot" After="InstallFinalize" Condition="NOT REMOVE AND UILevel &gt; 2" />
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="Sikirincot">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+</Wix>
