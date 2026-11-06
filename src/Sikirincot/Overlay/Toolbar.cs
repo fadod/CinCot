@@ -152,13 +152,7 @@ internal sealed class Toolbar : IDisposable
         int width = Math.Max(row1Width, row2Used + P(8) + statusWidth + pad);
         int height = pad * 2 + bs * 2 + rowGap;
 
-        // Below the selection, else above it, else inside its bottom edge; never across monitors.
-        int left = selection.Left;
-        int top = selection.Bottom + margin;
-        if (top + height > monitor.Bottom - P(4)) top = selection.Top - margin - height;
-        if (top < monitor.Top + P(4)) top = selection.Bottom - height - margin;
-        left = Math.Clamp(left, monitor.Left + P(4), Math.Max(monitor.Left + P(4), monitor.Right - width - P(4)));
-        top = Math.Clamp(top, monitor.Top + P(4), Math.Max(monitor.Top + P(4), monitor.Bottom - height - P(4)));
+        var (left, top) = Place(selection, monitor, new Size(width, height), margin, P(4));
         Bounds = new Rectangle(left, top, width, height);
 
         for (int i = 0; i < _buttons.Count; i++)
@@ -177,6 +171,31 @@ internal sealed class Toolbar : IDisposable
         _statusBounds = new Rectangle(left + width - pad - statusWidth, top + y2, statusWidth, bs);
 
         LayoutPopup();
+    }
+
+    /// <summary>
+    /// Where the toolbar goes, in order of preference: just below the selection's lower-right corner
+    /// (right edges aligned); below its lower-left corner when right-aligning would run off the monitor's
+    /// left edge; otherwise, with no room below, inside the selection at its bottom-right. It never
+    /// crosses onto another monitor.
+    /// </summary>
+    internal static (int Left, int Top) Place(Rectangle selection, Rectangle monitor, Size size, int margin, int edge)
+    {
+        int minX = monitor.Left + edge, maxX = Math.Max(minX, monitor.Right - size.Width - edge);
+        int minY = monitor.Top + edge, maxY = Math.Max(minY, monitor.Bottom - size.Height - edge);
+
+        int top = selection.Bottom + margin;
+        int left = selection.Right - size.Width;
+        if (top + size.Height <= monitor.Bottom - edge)
+        {
+            if (left < minX) left = selection.Left;              // lower-left corner instead
+        }
+        else
+        {
+            top = selection.Bottom - size.Height - margin;       // inside the screenshot, bottom-right
+            left = selection.Right - size.Width - margin;
+        }
+        return (Math.Clamp(left, minX, maxX), Math.Clamp(top, minY, maxY));
     }
 
     private void LayoutPopup()

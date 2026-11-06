@@ -113,6 +113,45 @@ public class CaptureTests
 
 public class ToolbarTests
 {
+    private static readonly Rectangle Monitor = new(0, 0, 1920, 1080);
+    private static readonly Size Bar = new(600, 90);
+
+    [Fact]
+    public void Toolbar_sits_below_the_lower_right_corner_by_default()
+    {
+        var sel = new Rectangle(700, 200, 800, 400);
+        var (left, top) = Toolbar.Place(sel, Monitor, Bar, 10, 4);
+        Assert.Equal(sel.Right - Bar.Width, left);   // right edges line up
+        Assert.Equal(sel.Bottom + 10, top);          // just below
+    }
+
+    [Fact]
+    public void Toolbar_moves_to_the_lower_left_corner_when_right_aligning_runs_off_screen()
+    {
+        var sel = new Rectangle(20, 200, 300, 300);  // narrow, near the left edge
+        var (left, top) = Toolbar.Place(sel, Monitor, Bar, 10, 4);
+        Assert.Equal(sel.Left, left);
+        Assert.Equal(sel.Bottom + 10, top);
+    }
+
+    [Fact]
+    public void Toolbar_goes_inside_the_screenshot_when_there_is_no_room_below()
+    {
+        var sel = new Rectangle(500, 300, 1000, 780); // reaches the bottom of the monitor
+        var (left, top) = Toolbar.Place(sel, Monitor, Bar, 10, 4);
+        Assert.Equal(sel.Right - Bar.Width - 10, left);
+        Assert.Equal(sel.Bottom - Bar.Height - 10, top);
+        Assert.True(sel.Contains(new Rectangle(left, top, Bar.Width, Bar.Height)));
+    }
+
+    [Fact]
+    public void Toolbar_inside_a_full_screen_capture_stays_on_the_monitor()
+    {
+        var (left, top) = Toolbar.Place(Monitor, Monitor, Bar, 10, 4);
+        Assert.True(Monitor.Contains(new Rectangle(left, top, Bar.Width, Bar.Height)));
+        Assert.Equal(Monitor.Right - Bar.Width - 10, left);   // bottom-right inside
+    }
+
     [Fact]
     public void Toolbar_stays_on_the_selection_monitor()
     {
